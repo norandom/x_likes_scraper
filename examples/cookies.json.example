@@ -35,7 +35,7 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "v1%3A174637292199028204"
+        "value": "YOUR_GUEST_ID_HERE"
     },
     {
         "domain": ".x.com",
@@ -48,7 +48,7 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "u%3D14252145"
+        "value": "u%3D123456789"
     },
     {
         "domain": "x.com",
@@ -99,7 +99,7 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "vQTdtfe9ctBZ0SRLeVgggHXtD0viNkMIRaqLs0Sa"
+        "value": "YOUR_KDT_TOKEN_HERE"
     },
     {
         "domain": ".x.com",
@@ -112,6 +112,6 @@
         "secure": true,
         "session": false,
         "storeId": null,
-        "value": "\"v1_jj6kqAt4RJlQTDcZOOuEBQ==\""
+        "value": "\"YOUR_PERSONALIZATION_ID_HERE\""
     }
 ]

@@ -38,6 +38,11 @@ output/
 *.html
 media/
 
+# Generated debug/log files
+response_debug.json
+full_response.json
+RESUME.md
+
 # Checkpoint files
 .export_checkpoint.json
 .export_tweets.pkl

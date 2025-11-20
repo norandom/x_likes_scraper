@@ -84,7 +84,12 @@ class XLikesExporter:
             progress_callback=progress_callback,
             stop_callback=stop_callback,
             start_cursor=start_cursor,
-            checkpoint_callback=lambda tweets, cursor: self._save_checkpoint(user_id, tweets, cursor, download_media) if self.checkpoint else None
+            checkpoint_callback=lambda new_tweets_batch, cursor: self._save_checkpoint(
+                user_id, 
+                self.tweets + new_tweets_batch, 
+                cursor, 
+                download_media
+            ) if self.checkpoint else None
         )
 
         # Merge with existing tweets if resuming

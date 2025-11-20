@@ -38,7 +38,7 @@ pip install -r requirements.txt
 2. Right-click anywhere → "Inspect" (or press F12)
 3. Press Ctrl+F (or Cmd+F) to search
 4. Search for: `data-user-id`
-5. Copy the number (e.g., `14252145`)
+5. Copy the number (e.g., `123456789`)
 
 ### Method 2: Using a Tool
 
@@ -65,7 +65,7 @@ Create `export_my_likes.py`:
 from x_likes_exporter import XLikesExporter
 
 # Your User ID (the number, not @username)
-USER_ID = "14252145"  # Replace with your actual User ID
+USER_ID = "123456789"  # Replace with your actual User ID
 
 # Initialize exporter
 exporter = XLikesExporter(
