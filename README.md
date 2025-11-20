@@ -5,6 +5,7 @@ A comprehensive Python library to export your liked tweets from X (formerly Twit
 ## Features
 
 - 🚀 **Multiple Export Formats**: JSON, CSV, Excel, Pandas DataFrame, Markdown, HTML
+- 🔄 **Resume Capability**: Interrupted exports can be resumed from where they left off
 - 📷 **Media Download**: Automatically downloads images and videos from tweets
 - 📊 **Data Analysis**: Export to Pandas for easy data analysis
 - 📝 **Markdown Export**: Beautiful Markdown files with locally embedded images
@@ -113,6 +114,9 @@ curl "https://tweeterid.com/ajax.php?username=YOUR_USERNAME"
 # Export to all formats
 python cli.py cookies.json YOUR_USER_ID
 
+# Resume an interrupted export
+python cli.py cookies.json YOUR_USER_ID --resume
+
 # Export only to JSON and Markdown (Markdown will be split by month by default)
 python cli.py cookies.json YOUR_USER_ID --format json --format markdown
 
@@ -143,7 +147,8 @@ exporter = XLikesExporter(
 # Fetch all likes
 tweets = exporter.fetch_likes(
     user_id="YOUR_USER_ID",
-    download_media=True
+    download_media=True,
+    resume=True  # Enable resume capability
 )
 
 # Export to all formats
@@ -154,6 +159,15 @@ exporter.export_json()
 exporter.export_markdown()
 exporter.export_csv()
 ```
+
+## Resume Functionality
+
+Large exports can take a long time and might be interrupted by network issues or rate limits. The exporter includes a robust checkpoint system:
+
+1. **Checkpoints**: The exporter automatically saves progress to `.export_checkpoint.json` and `.export_tweets.pkl` in your output directory.
+2. **Resuming**: Run with the `--resume` flag (CLI) or `resume=True` (Python API) to continue from where you left off.
+3. **Data Safety**: The checkpoint stores all previously fetched tweets and the current pagination cursor. Resuming merges new data with the existing checkpoint data, ensuring no likes are lost.
+4. **Completion**: Once an export completes successfully, the checkpoint files are automatically cleared.
 
 ## Usage Examples
 
@@ -271,11 +285,15 @@ Tabular format perfect for spreadsheet analysis:
 |----------|------|------------------|----------------|---------------|------------|
 | 123... | Tweet... | username | 50 | 10 | 2025-01-01 |
 
-### Markdown
+### Markdown (Split by Month)
 
-**By default, Markdown exports are split into separate files by year/month** in the `output/by_month/` directory (e.g., `likes_2025-01.md`, `likes_2025-02.md`). This makes large exports easier to browse.
+**Default Behavior:** Markdown exports are automatically split into separate files based on the tweet's creation date.
+- **Logic**: The exporter parses the `created_at` timestamp of each tweet.
+- **Grouping**: Tweets are grouped by Year-Month (e.g., `2025-01`, `2025-02`).
+- **Output**: Files are saved in the `output/by_month/` directory with filenames like `likes_2025-01.md`.
+- **Benefit**: This makes browsing years of history much faster and prevents having single massive Markdown files that lag editors.
 
-Use `--single-file` flag to export to a single file instead.
+**Single File Option**: Use the `--single-file` CLI flag (or `split_by_month=False` in Python) to force a single `likes.md` file.
 
 Readable format with embedded images:
 
@@ -471,11 +489,11 @@ exporter = XLikesExporter(cookies_file: str, output_dir: str = "output")
 
 **Methods:**
 
-- `fetch_likes(user_id, download_media=True, progress_callback=None)` → List[Tweet]
+- `fetch_likes(user_id, download_media=True, progress_callback=None, resume=False)` → List[Tweet]
 - `export_json(filename, include_raw=False)` → None
 - `export_csv(filename)` → None
 - `export_excel(filename)` → None
-- `export_markdown(filename, include_media=True)` → None
+- `export_markdown(filename, include_media=True, split_by_month=True)` → None
 - `export_html(filename)` → None
 - `export_all(base_name="likes", include_raw=False)` → None
 - `get_dataframe()` → pandas.DataFrame
