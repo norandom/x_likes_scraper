@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlparse
 from PIL import Image
-from io import BytesIO
 from .models import Tweet, Media
 
 

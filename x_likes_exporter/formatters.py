@@ -92,7 +92,7 @@ class PandasFormatter:
         Args:
             tweets: List of Tweet objects
             output_file: Output file path
-            format: Output format ('csv', 'excel', 'parquet', 'pickle')
+            format: Output format ('csv', 'excel', 'parquet')
         """
         df = PandasFormatter.to_dataframe(tweets)
 
@@ -102,8 +102,6 @@ class PandasFormatter:
             df.to_excel(output_file, index=False, engine='openpyxl')
         elif format == 'parquet':
             df.to_parquet(output_file, index=False)
-        elif format == 'pickle':
-            df.to_pickle(output_file)
         else:
             raise ValueError(f"Unsupported format: {format}")
 
@@ -149,7 +147,7 @@ class MarkdownFormatter:
                 if month_key not in tweets_by_month:
                     tweets_by_month[month_key] = []
                 tweets_by_month[month_key].append(tweet)
-            except:
+            except (ValueError, TypeError):
                 if 'unknown' not in tweets_by_month:
                     tweets_by_month['unknown'] = []
                 tweets_by_month['unknown'].append(tweet)
@@ -183,11 +181,10 @@ class MarkdownFormatter:
         lines.append(f"\n### [@{tweet.user.screen_name}](https://x.com/{tweet.user.screen_name})")
         lines.append(f"**{tweet.user.name}** {'✓' if tweet.user.verified else ''}")
 
-        # Tweet metadata
         try:
             created = tweet.get_created_datetime()
             date_str = created.strftime('%Y-%m-%d %H:%M:%S')
-        except:
+        except (ValueError, TypeError):
             date_str = tweet.created_at
 
         lines.append(f"*{date_str}*")
@@ -248,7 +245,7 @@ class MarkdownFormatter:
 
 
 class HTMLFormatter:
-    """Export tweets to HTML format (bonus)"""
+    """Export tweets to a single HTML page."""
 
     def export(self, tweets: List[Tweet], output_file: str):
         """

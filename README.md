@@ -1,18 +1,15 @@
 # X Likes Exporter (Python)
 
-A comprehensive Python library to export your liked tweets from X (formerly Twitter) to multiple formats including JSON, CSV, Pandas DataFrame, Markdown with images, and HTML.
+Export your liked tweets from X (formerly Twitter) to JSON, CSV, a Pandas DataFrame, Markdown with images, or HTML.
 
-## Features
+## What it does
 
-- 🚀 **Multiple Export Formats**: JSON, CSV, Excel, Pandas DataFrame, Markdown, HTML
-- 🔄 **Resume Capability**: Interrupted exports can be resumed from where they left off
-- 📷 **Media Download**: Automatically downloads images and videos from tweets
-- 📊 **Data Analysis**: Export to Pandas for easy data analysis
-- 📝 **Markdown Export**: Beautiful Markdown files with locally embedded images
-- ⏱️ **Rate Limit Handling**: Automatic rate limit detection and waiting
-- 📄 **Cursor Pagination**: Efficiently fetches all likes using cursor-based pagination
-- 💾 **Progress Tracking**: Real-time progress callbacks during export
-- 🔒 **Privacy First**: All processing happens locally, no data sent to third parties
+- Exports to JSON, CSV, Excel, Pandas, Markdown, or HTML.
+- Resumes interrupted exports from a checkpoint instead of restarting.
+- Downloads images and videos and rewrites Markdown to point at the local files.
+- Honors X's rate limit headers and waits when you run out of budget.
+- Walks the cursor-based pagination so you get every like, not just the first page.
+- Runs locally. Your cookies and tweets never leave the machine.
 
 ## Installation
 
@@ -37,32 +34,29 @@ pip install -e .
 - tqdm
 - python-dateutil
 
-## Quick Start
+## Quick start
 
-### 1. Export Your Cookies
+### 1. Export your cookies
 
-You need to export your X (Twitter) cookies to authenticate:
+You need your X cookies to authenticate against the API.
 
-#### Using a Browser Extension:
+#### With a browser extension
 
-1. Install a cookie export extension:
-   - **Chrome/Edge**: [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)
-   - **Firefox**: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+1. Install one:
+   - Chrome/Edge: [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)
+   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+2. Go to [x.com](https://x.com) while logged in.
+3. Export cookies as JSON.
+4. Save the file as `cookies.json`.
 
-2. Go to [x.com](https://x.com) and log in
+#### Manually
 
-3. Open the extension and export cookies as JSON
-
-4. Save as `cookies.json`
-
-#### Manual Method:
-
-1. Open Developer Tools (F12) on [x.com](https://x.com)
-2. Go to Application → Cookies → https://x.com
-3. Find and copy these important cookies:
-   - `ct0` (CSRF token)
+1. Open DevTools (F12) on [x.com](https://x.com).
+2. Go to Application → Cookies → https://x.com.
+3. Copy the values for these cookies:
+   - `ct0` (the CSRF token)
    - `auth_token`
-4. Create a `cookies.json` file (see format below)
+4. Put them into a `cookies.json` file (format below).
 
 <details>
 <summary>cookies.json Format</summary>
@@ -90,25 +84,21 @@ You need to export your X (Twitter) cookies to authenticate:
 
 </details>
 
-### 2. Find Your User ID
+### 2. Find your user ID
 
-Your User ID is a numeric ID, not your username.
+The exporter needs the numeric user ID, not the @handle.
 
-**Method 1: From HTML**
-1. Go to your profile on x.com
-2. Right-click → Inspect Element
-3. Search for `data-user-id` in the HTML
-4. Copy the numeric ID
+From the page source: open your profile, view source, search for `data-user-id`, copy the number.
 
-**Method 2: Using an API**
+Or via tweeterid:
+
 ```bash
-# Using this tool
 curl "https://tweeterid.com/ajax.php?username=YOUR_USERNAME"
 ```
 
-### 3. Run the Exporter
+### 3. Run it
 
-#### Using CLI:
+#### From the CLI
 
 ```bash
 # Export to all formats
@@ -133,7 +123,7 @@ python cli.py cookies.json YOUR_USER_ID --output my_export
 python cli.py cookies.json YOUR_USER_ID --stats
 ```
 
-#### Using Python API:
+#### From Python
 
 ```python
 from x_likes_exporter import XLikesExporter
@@ -148,7 +138,7 @@ exporter = XLikesExporter(
 tweets = exporter.fetch_likes(
     user_id="YOUR_USER_ID",
     download_media=True,
-    resume=True  # Enable resume capability
+    resume=True  # picks up from checkpoint if one exists
 )
 
 # Export to all formats
@@ -160,18 +150,13 @@ exporter.export_markdown()
 exporter.export_csv()
 ```
 
-## Resume Functionality
+## Resume
 
-Large exports can take a long time and might be interrupted by network issues or rate limits. The exporter includes a robust checkpoint system:
+Exporting tens of thousands of likes can take hours, and the run will eventually hit a network blip or a rate-limit wait. The exporter writes progress to `.export_checkpoint.json` and `.export_tweets.pkl` in the output directory as it goes. Pass `--resume` on the CLI (or `resume=True` in Python) to pick up where it stopped. The checkpoint holds the tweets fetched so far and the current pagination cursor; on resume the exporter merges new tweets with the saved set and deduplicates by ID. The checkpoint files are deleted automatically once an export finishes.
 
-1. **Checkpoints**: The exporter automatically saves progress to `.export_checkpoint.json` and `.export_tweets.pkl` in your output directory.
-2. **Resuming**: Run with the `--resume` flag (CLI) or `resume=True` (Python API) to continue from where you left off.
-3. **Data Safety**: The checkpoint stores all previously fetched tweets and the current pagination cursor. Resuming merges new data with the existing checkpoint data, ensuring no likes are lost.
-4. **Completion**: Once an export completes successfully, the checkpoint files are automatically cleared.
+## Usage examples
 
-## Usage Examples
-
-### Basic Export
+### Basic export
 
 ```python
 from x_likes_exporter import XLikesExporter
@@ -181,7 +166,7 @@ tweets = exporter.fetch_likes("123456789")
 exporter.export_all()
 ```
 
-### Export to Specific Formats
+### Export to specific formats
 
 ```python
 # JSON only
@@ -197,7 +182,7 @@ exporter.export_markdown("my_likes.md", include_media=True)
 exporter.export_html("my_likes.html")
 ```
 
-### Work with Pandas
+### Work with pandas
 
 ```python
 # Get as DataFrame
@@ -216,7 +201,7 @@ with_media = df[df['has_media'] == True]
 popular.to_csv("popular_tweets.csv", index=False)
 ```
 
-### Progress Monitoring
+### Progress monitoring
 
 ```python
 def progress_callback(current, total):
@@ -228,7 +213,7 @@ tweets = exporter.fetch_likes(
 )
 ```
 
-### Fetch Without Media
+### Fetch without media
 
 ```python
 # Faster if you don't need images
@@ -238,7 +223,7 @@ tweets = exporter.fetch_likes(
 )
 ```
 
-### Get Statistics
+### Get statistics
 
 ```python
 stats = exporter.get_stats()
@@ -247,11 +232,11 @@ print(f"Total media: {stats['total_media']}")
 print(f"Total likes: {stats['total_likes']}")
 ```
 
-## Output Formats
+## Output formats
 
 ### JSON
 
-Complete tweet data including user info, media, engagement stats:
+Tweet data with user info, media, and engagement counts:
 
 ```json
 [
@@ -279,21 +264,17 @@ Complete tweet data including user info, media, engagement stats:
 
 ### CSV / Excel
 
-Tabular format perfect for spreadsheet analysis:
+Flat table, one row per tweet:
 
 | tweet_id | text | user_screen_name | favorite_count | retweet_count | created_at |
 |----------|------|------------------|----------------|---------------|------------|
 | 123... | Tweet... | username | 50 | 10 | 2025-01-01 |
 
-### Markdown (Split by Month)
+### Markdown (split by month)
 
-**Default Behavior:** Markdown exports are automatically split into separate files based on the tweet's creation date.
-- **Logic**: The exporter parses the `created_at` timestamp of each tweet.
-- **Grouping**: Tweets are grouped by Year-Month (e.g., `2025-01`, `2025-02`).
-- **Output**: Files are saved in the `output/by_month/` directory with filenames like `likes_2025-01.md`.
-- **Benefit**: This makes browsing years of history much faster and prevents having single massive Markdown files that lag editors.
+By default, Markdown exports are split per month. The exporter parses each tweet's `created_at`, groups by year-month, and writes one file per group to `output/by_month/` (e.g. `likes_2025-01.md`). A few years of liked tweets in a single Markdown file makes most editors crawl, which is the only reason this exists.
 
-**Single File Option**: Use the `--single-file` CLI flag (or `split_by_month=False` in Python) to force a single `likes.md` file.
+To force a single `likes.md` file instead, pass `--single-file` on the CLI or `split_by_month=False` in Python.
 
 Readable format with embedded images:
 
@@ -317,11 +298,11 @@ Tweet text here...
 
 ### HTML
 
-Beautiful HTML page for viewing in browser with styled tweets and embedded media.
+A single HTML file you can open in a browser. Tweets are styled and media is embedded inline.
 
-## Advanced Usage
+## Advanced usage
 
-### Filter Tweets Before Export
+### Filter tweets before export
 
 ```python
 # Filter by date
@@ -341,7 +322,7 @@ exporter.tweets = popular
 exporter.export_json("popular.json")
 ```
 
-### Custom Analysis
+### Custom analysis
 
 ```python
 import pandas as pd
@@ -370,7 +351,7 @@ print(hashtag_counts.head(20))
 
 ## Architecture
 
-The library follows the same process as the Chrome extension:
+Roughly the same flow as the Chrome extension that inspired it:
 
 ```
 ┌──────────────────┐
@@ -403,29 +384,19 @@ The library follows the same process as the Chrome extension:
 └──────────────────┘
 ```
 
-## Rate Limiting
+## Rate limiting
 
-X's API has rate limits (typically 500 requests per 15-minute window). The library:
+X's API gives you roughly 500 requests per 15-minute window. The client reads the `x-rate-limit-limit`, `x-rate-limit-remaining`, and `x-rate-limit-reset` headers from each response. When `remaining` drops to 1, it sleeps until the reset timestamp (plus a 5-second buffer) and continues. There's also a 1-second pause between requests so you're not slamming the endpoint.
 
-1. **Monitors** rate limit headers from each response:
-   ```
-   x-rate-limit-limit: 500
-   x-rate-limit-remaining: 499
-   x-rate-limit-reset: 1704211200
-   ```
+Progress is printed as you go:
 
-2. **Waits automatically** when rate limit is reached (remaining ≤ 1)
+```
+Fetching page 25...
+Fetched 20 likes. Total: 500
+Rate limit: 475/500
+```
 
-3. **Adds polite delays** (1 second) between requests
-
-4. **Shows progress** with rate limit info:
-   ```
-   Fetching page 25...
-   Fetched 20 likes. Total: 500
-   Rate limit: 475/500
-   ```
-
-For 10,000+ likes, expect 1-2 hours with rate limit waits.
+For 10,000+ likes, expect 1-2 hours including the rate-limit waits.
 
 ## Troubleshooting
 
@@ -456,7 +427,7 @@ For 10,000+ likes, expect 1-2 hours with rate limit waits.
 - Some media URLs may have expired
 - Try running with `download_media=False` first
 
-## Project Structure
+## Project structure
 
 ```
 x_likes_exporter_py/
@@ -477,11 +448,11 @@ x_likes_exporter_py/
 └── README.md            # This file
 ```
 
-## API Reference
+## API reference
 
 ### XLikesExporter
 
-Main class for exporting likes.
+The main exporter.
 
 ```python
 exporter = XLikesExporter(cookies_file: str, output_dir: str = "output")
@@ -499,9 +470,9 @@ exporter = XLikesExporter(cookies_file: str, output_dir: str = "output")
 - `get_dataframe()` → pandas.DataFrame
 - `get_stats()` → dict
 
-### Tweet Model
+### Tweet model
 
-Represents a single tweet.
+A single tweet.
 
 **Attributes:**
 - `id`: str - Tweet ID
@@ -525,40 +496,26 @@ Represents a single tweet.
 
 ## Performance
 
-### Speed
+Fetch throughput is roughly 20 likes per second, capped by X's rate limit. Media download speed depends on your connection. In-memory processing is negligible (under a second for 1,000 tweets).
 
-- **Fetching**: ~20 likes per second (rate limited)
-- **Media download**: Depends on internet speed
-- **Processing**: Very fast (< 1 second for 1000 tweets)
+Memory use is around 2-5 KB per tweet, so 10,000 likes is ~20-50 MB and 50,000 is ~100-250 MB.
 
-### Memory
+Rough time-to-finish, including rate-limit waits:
 
-- **~2-5 KB per tweet** in memory
-- **10,000 likes**: ~20-50 MB
-- **50,000 likes**: ~100-250 MB
+| Likes  | Time            |
+|--------|-----------------|
+| 100    | 5-10 seconds    |
+| 1,000  | 1-2 minutes     |
+| 10,000 | 15-30 minutes   |
+| 50,000 | 1-2 hours       |
 
-### Time Estimates
+## Privacy and security
 
-| Likes | Time (approx) |
-|-------|---------------|
-| 100 | 5-10 seconds |
-| 1,000 | 1-2 minutes |
-| 10,000 | 15-30 minutes |
-| 50,000 | 1-2 hours |
-
-Time includes rate limit waits.
-
-## Privacy & Security
-
-- ✅ All processing happens locally
-- ✅ No data sent to third-party servers
-- ✅ Cookies stay on your machine
-- ✅ Uses your existing X session
-- ✅ Open source - audit the code yourself
+Everything runs locally. The script reads your `cookies.json`, talks to X's API directly using your existing session, and writes files to disk. Nothing is sent to a third-party server. The source is here, so you can read it yourself before running it.
 
 ## License
 
-MIT License - Feel free to use, modify, and distribute.
+MIT.
 
 ## Credits
 
@@ -566,4 +523,4 @@ Inspired by the [Twitter Exporter](https://chrome.google.com/webstore/detail/twi
 
 ## Disclaimer
 
-This tool is not affiliated with X Corp or Twitter. Use at your own risk. Be respectful of API rate limits and terms of service.
+Not affiliated with X Corp or Twitter. Use at your own risk and don't hammer the API.

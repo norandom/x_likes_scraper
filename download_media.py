@@ -46,11 +46,19 @@ def main():
     print(f"Found {len(media_items)} media items to download")
     print("Downloading media...")
 
-    # Download with progress bar
+    # Skip files already on disk; filenames are tweet_id_index.*
+    media_dir = Path("output/media")
+    existing_prefixes = {f.stem.rsplit('_', 1)[0] + '_' + f.stem.rsplit('_', 1)[1]
+                        for f in media_dir.glob('*') if '_' in f.stem}
+
     successful = 0
     failed = 0
+    skipped = 0
 
     for tweet_id, idx, media in tqdm(media_items, desc="Downloading"):
+        if f"{tweet_id}_{idx}" in existing_prefixes:
+            skipped += 1
+            continue
         try:
             local_path = downloader.download_media(media, tweet_id, idx)
             if local_path:
@@ -61,7 +69,8 @@ def main():
                 print(f"\nError downloading {media.media_url}: {e}")
 
     print(f"\n✓ Download complete!")
-    print(f"  Successful: {successful}")
+    print(f"  Skipped (already on disk): {skipped}")
+    print(f"  Newly downloaded: {successful}")
     print(f"  Failed: {failed}")
     print(f"  Total size: {sum(f.stat().st_size for f in Path('output/media').glob('*')) / 1024 / 1024:.1f} MB")
 

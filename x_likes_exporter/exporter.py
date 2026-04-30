@@ -204,11 +204,11 @@ class XLikesExporter:
             tweets_by_month = defaultdict(list)
             for tweet in self.tweets:
                 try:
-                    # Parse date: "Sun Nov 09 11:05:17 +0000 2025"
+                    # Format: "Sun Nov 09 11:05:17 +0000 2025"
                     dt = datetime.strptime(tweet.created_at, "%a %b %d %H:%M:%S %z %Y")
                     year_month = dt.strftime("%Y-%m")
                     tweets_by_month[year_month].append(tweet)
-                except:
+                except (ValueError, TypeError):
                     tweets_by_month["unknown"].append(tweet)
 
             # Create output directory

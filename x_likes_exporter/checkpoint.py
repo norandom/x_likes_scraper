@@ -56,7 +56,7 @@ class Checkpoint:
         with open(self.checkpoint_file, 'w', encoding='utf-8') as f:
             json.dump(checkpoint_data, f, indent=2)
 
-        # Save tweets using pickle (faster than JSON for large datasets)
+        # pickle is faster than re-serializing Tweet objects to JSON each save
         with open(self.tweets_file, 'wb') as f:
             pickle.dump(tweets, f)
 

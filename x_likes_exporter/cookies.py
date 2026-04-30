@@ -3,8 +3,7 @@ Cookie parsing and management for X authentication
 """
 
 import json
-from typing import Dict, List
-from http.cookiejar import Cookie
+from typing import Dict
 
 
 class CookieManager:

@@ -26,7 +26,7 @@ class RateLimitInfo:
     def get_wait_time(self) -> int:
         """Get seconds to wait until rate limit resets"""
         now = int(time.time())
-        wait_time = self.reset - now + 5  # Add 5 second buffer
+        wait_time = self.reset - now + 5  # 5s buffer past the reset timestamp
         return max(0, wait_time)
 
 
@@ -44,7 +44,7 @@ class XAPIClient:
         self.authenticator = XAuthenticator(cookie_manager)
         self.session = requests.Session()
         self.rate_limit_info: Optional[RateLimitInfo] = None
-        self._request_delay = 1.0  # Polite delay between requests (seconds)
+        self._request_delay = 1.0  # seconds between requests, to stay under the rate limit
 
     def fetch_likes(
         self,
@@ -267,7 +267,6 @@ class XAPIClient:
                         checkpoint_callback(all_tweets, cursor)
                     time.sleep(wait_time)
 
-            # Polite delay between requests
             time.sleep(self._request_delay)
 
         print(f"Fetch complete! Total likes: {len(all_tweets)}")
@@ -370,12 +369,12 @@ class XAPIClient:
                 raw_data=tweet_data
             )
 
-            # Parse view count if available
             views = tweet_data.get("views", {}).get("count")
             if views:
                 try:
                     tweet.view_count = int(views)
-                except:
+                except (ValueError, TypeError):
+                    # view counts are best-effort; leave default 0 if X returns garbage
                     pass
 
             return tweet

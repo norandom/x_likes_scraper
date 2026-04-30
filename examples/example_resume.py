@@ -73,19 +73,19 @@ def example_manual_control():
 
         if choice.lower() == 'y':
             # Resume
-            tweets = exporter.fetch_likes(
+            _ = exporter.fetch_likes(
                 user_id="123456789",
                 resume=True
             )
         else:
             # Clear and start fresh
             exporter.checkpoint.clear()
-            tweets = exporter.fetch_likes(
+            _ = exporter.fetch_likes(
                 user_id="123456789"
             )
     else:
         # No checkpoint, start fresh
-        tweets = exporter.fetch_likes(
+        _ = exporter.fetch_likes(
             user_id="123456789"
         )
 
@@ -113,7 +113,7 @@ def example_with_progress():
         last_count = current
 
     # Resume with progress tracking
-    tweets = exporter.fetch_likes(
+    _ = exporter.fetch_likes(
         user_id="123456789",
         progress_callback=on_progress,
         resume=True

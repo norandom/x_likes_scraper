@@ -1,17 +1,17 @@
-# Quick Start Guide
+# Quick start
 
-Get up and running with X Likes Exporter in 5 minutes!
+The short path from "I have an X account" to "I have my likes on disk."
 
-## Step 1: Install Dependencies
+## Step 1: Install dependencies
 
 ```bash
 cd x_likes_exporter_py
 pip install -r requirements.txt
 ```
 
-## Step 2: Export Your Cookies
+## Step 2: Export your cookies
 
-### Using a Browser Extension (Recommended)
+### With a browser extension
 
 1. Install [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm) for Chrome/Edge
 2. Go to https://x.com and make sure you're logged in
@@ -19,35 +19,28 @@ pip install -r requirements.txt
 4. Click "Export" → "JSON"
 5. Save as `cookies.json` in the `x_likes_exporter_py` folder
 
-### Manual Method
+### Manual method
 
-1. Go to https://x.com (logged in)
-2. Press F12 to open Developer Tools
-3. Go to Application → Cookies → https://x.com
+1. Go to https://x.com while logged in.
+2. Press F12 to open Developer Tools.
+3. Go to Application → Cookies → https://x.com.
 4. Find these two cookies and copy their values:
-   - `ct0` - your CSRF token
-   - `auth_token` - your authentication token
-5. Copy `examples/cookies.json.example` to `cookies.json`
-6. Replace `YOUR_CT0_TOKEN_HERE` and `YOUR_AUTH_TOKEN_HERE` with your actual values
+   - `ct0` (CSRF token)
+   - `auth_token` (auth token)
+5. Copy `examples/cookies.json.example` to `cookies.json`.
+6. Replace `YOUR_CT0_TOKEN_HERE` and `YOUR_AUTH_TOKEN_HERE` with the real values.
 
-## Step 3: Find Your User ID
+## Step 3: Find your user ID
 
-### Method 1: From Profile Page
+The exporter needs the numeric user ID, not the @handle.
 
-1. Go to your profile: https://x.com/YOUR_USERNAME
-2. Right-click anywhere → "Inspect" (or press F12)
-3. Press Ctrl+F (or Cmd+F) to search
-4. Search for: `data-user-id`
-5. Copy the number (e.g., `123456789`)
+From your profile page: open https://x.com/YOUR_USERNAME, hit F12, search the HTML for `data-user-id`, and copy the number.
 
-### Method 2: Using a Tool
+Or use https://tweeterid.com/ and paste in your @handle.
 
-Visit: https://tweeterid.com/
-Enter your @username and get your User ID
+## Step 4: Run it
 
-## Step 4: Run the Exporter
-
-### Command Line (Easiest)
+### From the command line
 
 ```bash
 # Export everything (JSON, CSV, Markdown, HTML)
@@ -57,7 +50,7 @@ python cli.py cookies.json YOUR_USER_ID
 python cli.py --help
 ```
 
-### Python Script
+### From Python
 
 Create `export_my_likes.py`:
 
@@ -94,9 +87,7 @@ Run it:
 python export_my_likes.py
 ```
 
-## What You'll Get
-
-After export, you'll have:
+## What you end up with
 
 ```
 my_likes_export/
@@ -110,7 +101,7 @@ my_likes_export/
     └── ...
 ```
 
-## Common Commands
+## Common commands
 
 ```bash
 # Export only JSON and Markdown
@@ -126,7 +117,7 @@ python cli.py cookies.json YOUR_USER_ID --output my_folder
 python cli.py cookies.json YOUR_USER_ID --stats
 ```
 
-## Analyze with Pandas
+## Analyze with pandas
 
 ```python
 from x_likes_exporter import XLikesExporter
@@ -146,26 +137,17 @@ df.to_csv("analysis.csv", index=False)
 
 ## Troubleshooting
 
-### "Invalid cookies"
-→ Re-export cookies from your browser. Make sure you're logged in to X.
+`Invalid cookies`: re-export from the browser, making sure you're logged in.
 
-### "Authentication failed"
-→ Your session expired. Log out of X, log back in, and export fresh cookies.
+`Authentication failed`: the session expired. Log out, log back in, export fresh cookies.
 
-### Takes too long
-→ X has rate limits. For 10,000+ likes, it may take 1-2 hours. This is normal!
+Takes a long time: X's rate limit is the bottleneck. For 10,000+ likes, plan on 1-2 hours.
 
-### No images downloading
-→ Add `download_media=True` when calling `fetch_likes()`, or check your internet connection.
+No images downloading: pass `download_media=True` to `fetch_likes()` and check your connection.
 
-## Next Steps
+## Next steps
 
-- Read [README.md](README.md) for full documentation
-- Check [examples/example_usage.py](examples/example_usage.py) for more examples
-- Analyze your data with Pandas!
+- [README.md](README.md) for the full reference.
+- [examples/example_usage.py](examples/example_usage.py) for more code samples.
 
-## Need Help?
-
-- Check the full README.md
-- Look at example_usage.py
-- Open an issue on GitHub
+If you hit something not covered above, open an issue on GitHub.

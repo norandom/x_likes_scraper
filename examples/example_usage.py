@@ -37,7 +37,7 @@ def example_selective_export():
         output_dir="output"
     )
 
-    tweets = exporter.fetch_likes(user_id="123456789")
+    _ = exporter.fetch_likes(user_id="123456789")
 
     # Export only to JSON and Markdown
     exporter.export_json(filename="my_likes.json")
@@ -53,7 +53,7 @@ def example_with_pandas():
         output_dir="output"
     )
 
-    tweets = exporter.fetch_likes(user_id="123456789", download_media=False)
+    _ = exporter.fetch_likes(user_id="123456789", download_media=False)
 
     # Get as DataFrame
     df = exporter.get_dataframe()
@@ -85,7 +85,7 @@ def example_with_progress():
         else:
             print(f"Fetched: {current} tweets")
 
-    tweets = exporter.fetch_likes(
+    _ = exporter.fetch_likes(
         user_id="123456789",
         download_media=True,
         progress_callback=on_progress
@@ -102,7 +102,7 @@ def example_no_media():
     )
 
     # Don't download media (faster)
-    tweets = exporter.fetch_likes(
+    _ = exporter.fetch_likes(
         user_id="123456789",
         download_media=False
     )
@@ -120,7 +120,7 @@ def example_statistics():
         output_dir="output"
     )
 
-    tweets = exporter.fetch_likes(user_id="123456789")
+    _ = exporter.fetch_likes(user_id="123456789")
 
     # Get statistics
     stats = exporter.get_stats()
