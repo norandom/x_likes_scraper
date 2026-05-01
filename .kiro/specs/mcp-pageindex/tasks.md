@@ -46,7 +46,7 @@
 
 ## 2. Configuration and error layers
 
-- [ ] 2.1 (P) Implement `config.py` with `.env` reader and `Config` dataclass
+- [x] 2.1 (P) Implement `config.py` with `.env` reader and `Config` dataclass
   - Define frozen `Config` dataclass with the fields documented in design.md (`output_dir`, `by_month_dir`, `likes_json`, `cache_path`, `openai_base_url`, `openai_api_key`, `openai_model`, `openai_model`)
   - Implement a stdlib `.env` reader (split on `=`, strip comments and whitespace, no shell-quote handling)
   - Implement `load_config(env_path=None, env=None)` that reads `.env` from cwd by default, falls back to `os.environ`, and validates that `OPENAI_BASE_URL` and `OPENAI_MODEL` are set and non-empty
@@ -58,7 +58,7 @@
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 11.1_
   - _Boundary: x_likes_mcp/config.py_
 
-- [ ] 2.2 (P) Implement `errors.py` with `ToolError` and category helpers
+- [x] 2.2 (P) Implement `errors.py` with `ToolError` and category helpers
   - Define `ToolError(Exception)` carrying `category: str` and `message: str` attributes
   - Implement `invalid_input(field, message)`, `not_found(what, identifier)`, `upstream_failure(detail)` factory functions returning `ToolError` instances with the right category strings
   - Observable completion: `errors.invalid_input("query", "must be non-empty").category == "invalid_input"`; the same for `not_found` and `upstream_failure`; `str(err)` includes the field name and the message
