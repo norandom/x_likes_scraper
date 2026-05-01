@@ -38,6 +38,14 @@ output/
 *.html
 media/
 
+# Tracked: spec docs, agent skills, scratch scan output stays ignored
+!.kiro/
+!.kiro/**
+!.claude/
+!.claude/**
+static_analysis_codeql_*/
+static_analysis_semgrep_*/
+
 # Generated debug/log files
 response_debug.json
 full_response.json
