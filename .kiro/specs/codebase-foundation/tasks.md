@@ -55,7 +55,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 1.1, 11.3_
   - _Boundary: pyproject_
 
-- [ ] 6. Set up the test infrastructure
+- [x] 6. Set up the test infrastructure
 - [x] 6.1 Create `tests/` skeleton with `conftest.py` and a network guard
   - Create `tests/__init__.py` and `tests/conftest.py`.
   - In `conftest.py`, configure an autouse session fixture that activates `responses` in strict mode so any unregistered URL raises `ConnectionError`.
