@@ -4,9 +4,9 @@
 
 This spec puts a stdio MCP server in front of the per-month Markdown the exporter already produces. The server exposes four tools: `search_likes`, `list_months`, `get_month`, `read_tweet`. `search_likes` is the only one with reasoning behind it. It hands the user's question (plus an optional structured year/month filter) to PageIndex with a tree built from `output/by_month/likes_YYYY-MM.md`, and PageIndex's reasoning step walks that tree to find matches. The other three are file-and-data lookups over the read API from Spec 1.
 
-The reasoning step routes through LiteLLM, which is what PageIndex uses internally. The local LLM endpoint is configured as Anthropic-compatible: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`. PageIndex is invoked with `model=f"anthropic/{ANTHROPIC_DEFAULT_OPUS_MODEL}"` so LiteLLM picks up the base URL and key from env. No calls to hosted vendors by default.
+The reasoning step calls the OpenAI SDK directly, which is what PageIndex uses internally. The local LLM endpoint is configured as OpenAI-compatible: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. PageIndex is invoked with `model=OPENAI_MODEL`, and the OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when constructing its client. No calls to hosted vendors by default.
 
-The server is single-user, local, stdio. No HTTP, no auth, no multi-user concerns. Runtime story: the user has run `scrape.sh` at least once, has `output/by_month/` and `output/likes.json` on disk, has a local Anthropic-compatible endpoint up, and registers `python -m x_likes_mcp` with their MCP client. Then they can ask their like history questions in natural language.
+The server is single-user, local, stdio. No HTTP, no auth, no multi-user concerns. Runtime story: the user has run `scrape.sh` at least once, has `output/by_month/` and `output/likes.json` on disk, has a local OpenAI-compatible endpoint up, and registers `python -m x_likes_mcp` with their MCP client. Then they can ask their like history questions in natural language.
 
 The `search_likes` filter (`year`, `month_start`, `month_end`) is a structured pre-filter, not a prose hint. The server narrows the file set handed to PageIndex before the reasoning walk begins. This is faster (smaller tree) and more reliable (the LLM cannot quietly ignore a date phrased in the prompt) than the prose-only alternative.
 
@@ -19,7 +19,7 @@ This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: dr
 ### Goals
 
 - A `python -m x_likes_mcp` invocation on a fresh checkout (after `uv sync` and `scrape.sh`) starts a stdio MCP server with the four tools advertised.
-- All four tools work end-to-end against a fixture export, with the LiteLLM call and the PageIndex tree builder mocked. `pytest tests/mcp/` passes with no network and no LLM.
+- All four tools work end-to-end against a fixture export, with the OpenAI SDK call and the PageIndex tree builder mocked. `pytest tests/mcp/` passes with no network and no LLM.
 - `search_likes(query, year=2025, month_start="04", month_end="06")` only sees `likes_2025-04.md`, `likes_2025-05.md`, `likes_2025-06.md` and is roughly an order of magnitude faster than an open-ended call.
 - The server consumes Spec 1's `load_export(path)` and `iter_monthly_markdown(path)` exclusively for export reads. It does not reach into `XLikesExporter` or any module under `x_likes_exporter` other than what `__init__.py` exposes.
 - `MarkdownFormatter.export` produces per-month files without the global h1 when called in per-month mode, and produces them with the h1 in single-file mode. Existing single-file behavior is unchanged.
@@ -31,7 +31,7 @@ This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: dr
 - Re-fetching from X. Read-only over existing exports.
 - A vector store, embeddings, or any retrieval backend other than PageIndex.
 - Multi-user, auth, rate limiting, telemetry.
-- Calls to hosted LLM services by default. The user can point `ANTHROPIC_BASE_URL` at a hosted vendor if they want; the server does not.
+- Calls to hosted LLM services by default. The user can point `OPENAI_BASE_URL` at a hosted vendor if they want; the server does not.
 - Pre-computing the index in a separate process. Tree build happens in-server on first start (or after invalidation).
 - Live filesystem watching. New `.md` files are picked up on server restart, not at runtime.
 - Tests that exercise a real local LLM. Real-model verification is a manual step documented in the README.
@@ -44,9 +44,9 @@ This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: dr
 - A new top-level Python package `x_likes_mcp/` with the modules described in File Structure Plan.
 - The `python -m x_likes_mcp` entry point (via `x_likes_mcp/__main__.py`).
 - A new `[project.scripts]` entry `x-likes-mcp = "x_likes_mcp.__main__:main"` in `pyproject.toml`.
-- Two new runtime dependencies in `pyproject.toml`: `mcp` (the Python MCP SDK) and `pageindex`. PageIndex pulls in `litellm` transitively.
+- Two new runtime dependencies in `pyproject.toml`: `mcp` (the Python MCP SDK) and `pageindex`. PageIndex pulls in `openai` transitively.
 - The cache file path (`<output_dir>/pageindex_cache.pkl`) and the mtime-based invalidation rule.
-- Three new `.env` variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`) and the corresponding entries in `.env.sample`.
+- Three new `.env` variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) and the corresponding entries in `.env.sample`.
 - A README section on registering the server with Claude Code (or any MCP client).
 - Tests under `tests/mcp/` (a subdirectory so they are separable from Spec 1's tests in `tests/`).
 - A narrowly-scoped change to `x_likes_exporter/formatters.py:MarkdownFormatter.export`: a new `omit_global_header: bool = False` keyword argument that suppresses the per-file h1 plus the export-timestamp metadata when set. The exporter passes `omit_global_header=True` from the per-month loop. The single-file callsite passes nothing and therefore preserves existing output verbatim. The corresponding test update in `tests/test_formatters.py` lives in this spec's task plan.
@@ -63,7 +63,7 @@ This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: dr
 
 - Spec 1's public read API: `from x_likes_exporter import load_export, iter_monthly_markdown` and the `Tweet` dataclass it returns.
 - `mcp` (Python MCP SDK) for the stdio server scaffold and JSON-schema declarations.
-- `pageindex` for tree building and the query-time reasoning step. PageIndex pulls in `litellm` transitively; LiteLLM in turn drives the Anthropic-compatible HTTP call.
+- `pageindex` for tree building and the query-time reasoning step. PageIndex pulls in `openai` transitively; the OpenAI SDK drives the OpenAI-compatible HTTP call.
 - Stdlib only for everything else: `pathlib`, `pickle` (or a JSON variant if PageIndex publishes one) for the cache, `os`/`sys`/`logging`, `re`, `argparse`.
 - A small hand-rolled `.env` loader (no `python-dotenv` dependency) because `scrape.sh` does not currently depend on `python-dotenv` either.
 
@@ -81,7 +81,7 @@ This spec re-checks if Spec 1 changes any of:
 Conversely, downstream consumers of this spec (none planned today) would re-check on:
 
 - Tool name, input schema, or output schema of any of the four tools, including the `search_likes` filter fields.
-- The `.env` variable names (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`) or the `anthropic/<model>` LiteLLM convention.
+- The `.env` variable names (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) or the OpenAI SDK env-var contract.
 - The cache file path or invalidation rule.
 - The console script name (`x-likes-mcp`) or module name (`x_likes_mcp`).
 
@@ -115,8 +115,8 @@ graph TB
     subgraph external[external runtime]
         MCP_SDK[mcp Python SDK]
         PageIndex_lib[pageindex]
-        LiteLLM[litellm transitive]
-        LLM[Anthropic-compatible endpoint]
+        OpenAI_SDK[openai SDK transitive]
+        LLM[OpenAI-compatible endpoint]
         Output[output by_month and likes.json]
     end
 
@@ -130,8 +130,8 @@ graph TB
     Index --> PageIndex_lib
     Index --> Loader
     Index --> Output
-    PageIndex_lib --> LiteLLM
-    LiteLLM --> LLM
+    PageIndex_lib --> OpenAI_SDK
+    OpenAI_SDK --> LLM
     Loader --> Output
     Loader --> Models
     Formatters --> Models
@@ -149,8 +149,8 @@ There is no dependency from `x_likes_exporter` to `x_likes_mcp`. The arrow only 
 |-------|------------------|------|-------|
 | Runtime | Python >= 3.12 | Same as the rest of the project. | No version bump. |
 | MCP transport | `mcp >= 1.0` (Python SDK) | Stdio server, tool registration, JSON schema declarations. | New runtime dep. Stdio-only; HTTP/SSE not used. |
-| Indexing | `pageindex` (pinned at impl time) | Tree builder over Markdown files; query-time reasoning step. | New runtime dep. Routes through LiteLLM transitively. |
-| LLM transport | `litellm` (transitive via PageIndex) | Anthropic-compatible HTTP call from PageIndex's reasoning step. | Reads `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` from env when the model string is `anthropic/<model_name>`. |
+| Indexing | `pageindex` (pinned at impl time) | Tree builder over Markdown files; query-time reasoning step. | New runtime dep. Calls the OpenAI SDK directly. |
+| LLM transport | `openai` (transitive via PageIndex) | OpenAI-compatible HTTP call from PageIndex's reasoning step. | Reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when constructing the async client. |
 | `.env` parsing | Stdlib (small hand-rolled loader) | Read three env variables on startup. | ~15 lines, tested directly. Avoids adding `python-dotenv`. |
 | Cache | Stdlib `pickle` | Persist the PageIndex tree across restarts. | Single-user, local, never crosses a trust boundary. If PageIndex publishes a JSON or other safer serialization at impl time, prefer that. |
 | Test runner | `pytest >= 8.0` (already pinned by Spec 1) | Test discovery, fixtures. | Reuse Spec 1's `[dependency-groups].dev`. |
@@ -158,7 +158,7 @@ There is no dependency from `x_likes_exporter` to `x_likes_mcp`. The arrow only 
 Two notes on dep choices:
 
 1. PageIndex's exact public API will be confirmed at implementation time. The `Index` wrapper exists specifically so swapping PageIndex for an alternative is a contained change.
-2. LiteLLM's env var conventions for Anthropic routing are the load-bearing assumption here. The implementation must verify against LiteLLM's docs at impl time which env var names it actually honors when the model string is `anthropic/<...>` — `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` is the user-facing name; if LiteLLM expects `ANTHROPIC_API_KEY` or similar internally, `config.py` translates the user-facing names into whatever LiteLLM expects before the PageIndex call. The user only ever sets the three documented variables.
+2. The OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` at client-construction time. `config.load_config` writes the resolved values into `os.environ` before any PageIndex call so the SDK picks them up when PageIndex's reasoning step instantiates its async client. The user only ever sets the three documented variables.
 
 ## File Structure Plan
 
@@ -168,7 +168,7 @@ Two notes on dep choices:
 x_likes_mcp/
   __init__.py            # Package marker. Defines __version__.
   __main__.py            # Entry point: load config, build index, run stdio loop, exit codes.
-  config.py              # Config dataclass + .env reader. Validates Anthropic env vars present.
+  config.py              # Config dataclass + .env reader. Validates OpenAI env vars present.
   errors.py              # ToolError exception + category helpers.
   index.py               # Index class: build/load tree, cache invalidation, search, lookup.
   tools.py               # Four tool handlers: search_likes, list_months, get_month, read_tweet.
@@ -192,7 +192,7 @@ tests/mcp/
 ### Modified files
 
 - `pyproject.toml` — add `mcp` and `pageindex` to `[project.dependencies]`; add `x-likes-mcp = "x_likes_mcp.__main__:main"` to `[project.scripts]`; extend `[tool.hatch.build.targets.wheel].packages` to include `x_likes_mcp`.
-- `.env.sample` — add `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL` with comments stating the endpoint is local Anthropic-compatible by default.
+- `.env.sample` — add `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` with comments stating the endpoint is local OpenAI-compatible by default.
 - `README.md` — add an "MCP Server" section: `.mcp.json` snippet, `claude mcp add` example, the four tools, the `.env` requirements, the prerequisite that `scrape.sh` has been run.
 - `x_likes_exporter/formatters.py` — `MarkdownFormatter.export` gains an `omit_global_header: bool = False` keyword parameter. When `True`, the function skips the four lines that emit `# X (Twitter) Liked Tweets`, the `**Exported:** ...` timestamp line, the `**Total Tweets:** ...` line, and the trailing `---` separator. Everything else (the per-month sections, per-tweet blocks, the file write at the bottom) is unchanged.
 - `x_likes_exporter/exporter.py` — `XLikesExporter.export_markdown` passes `omit_global_header=True` to `formatter.export(...)` inside the per-month loop. The non-split-by-month branch (a single `formatter.export(...)` call near the end) does not pass it, so the single-file output is byte-identical to today.
@@ -218,14 +218,14 @@ sequenceDiagram
     participant Index as index
     participant Loader as x_likes_exporter.loader
     participant PageIndex as pageindex
-    participant LiteLLM as litellm
+    participant OpenAI as openai SDK
     participant Server as server
     participant MCP as MCP client
 
     User->>Main: python -m x_likes_mcp
     Main->>Config: load_config()
-    Config->>Config: read .env, validate ANTHROPIC_BASE_URL and ANTHROPIC_DEFAULT_OPUS_MODEL
-    Config->>Config: export ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN to os.environ for LiteLLM
+    Config->>Config: read .env, validate OPENAI_BASE_URL and OPENAI_MODEL
+    Config->>Config: write OPENAI_BASE_URL, OPENAI_API_KEY to os.environ
     Config-->>Main: Config dataclass
     Main->>Index: open_or_build(config)
     Index->>Loader: iter_monthly_markdown(by_month_dir)
@@ -233,9 +233,9 @@ sequenceDiagram
     alt cache fresh
         Index->>Index: pickle.load(cache_path)
     else cache stale or missing
-        Index->>PageIndex: build_tree(paths, model="anthropic/<opus>")
-        PageIndex->>LiteLLM: reasoning calls during build
-        LiteLLM->>LiteLLM: read ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN from env
+        Index->>PageIndex: build_tree(paths, model=OPENAI_MODEL)
+        PageIndex->>OpenAI: reasoning calls during build
+        OpenAI->>OpenAI: read OPENAI_BASE_URL, OPENAI_API_KEY from os.environ at client construction
         PageIndex-->>Index: tree + side-table
         Index->>Index: pickle.dump((tree, side_table), cache_path) atomically
     end
@@ -255,18 +255,18 @@ sequenceDiagram
     participant Tools as tools
     participant Index as index
     participant PageIndex as pageindex
-    participant LiteLLM as litellm
-    participant LLM as Anthropic endpoint
+    participant OpenAI as openai SDK
+    participant LLM as OpenAI-compatible endpoint
 
     Client->>Tools: search_likes(query, year, month_start, month_end)
     Tools->>Tools: validate query non-empty, year/month shape
     Tools->>Index: search(query, filter)
     Index->>Index: select cached subtree limited to filter range
     Index->>PageIndex: query(subtree, query)
-    PageIndex->>LiteLLM: reasoning request
-    LiteLLM->>LLM: HTTP call to ANTHROPIC_BASE_URL
-    LLM-->>LiteLLM: response
-    LiteLLM-->>PageIndex: parsed answer
+    PageIndex->>OpenAI: reasoning request
+    OpenAI->>LLM: HTTP call to OPENAI_BASE_URL
+    LLM-->>OpenAI: response
+    OpenAI-->>PageIndex: parsed answer
     PageIndex-->>Index: matches with section refs
     Index->>Index: map sections to (month, handle, tweet_id, snippet)
     Index-->>Tools: list of SearchHit
@@ -297,7 +297,7 @@ These three are file-and-data lookups, no diagram needed. `read_tweet` finds the
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| `config` | Startup | Read `.env`, validate, hand back a `Config` dataclass. Export Anthropic env vars to `os.environ` so LiteLLM picks them up. | 2.1, 2.2, 2.3, 2.4, 2.5, 11.1 | stdlib | Service |
+| `config` | Startup | Read `.env`, validate, hand back a `Config` dataclass. Write OpenAI env vars to `os.environ` so the OpenAI SDK picks them up at client-construction time. | 2.1, 2.2, 2.3, 2.4, 2.5, 11.1 | stdlib | Service |
 | `errors` | Cross-cutting | Tool-error shapes, category helpers. | 4.3, 4.4, 6.2, 6.3, 7.3, 7.4, 11.2, 11.4 | stdlib | Service |
 | `index` | Indexing + cache | Build/load PageIndex tree, hold it in memory plus the in-memory `Tweet` dict, expose `search` (with optional filter), `lookup_tweet`, `list_months`, `get_month_markdown`. | 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.5, 7.1, 7.2, 7.3, 8.4, 8.5, 11.3 | `pageindex`, `x_likes_exporter.loader` | Service, State |
 | `tools` | MCP tool handlers | Four functions implementing the tools, each with input validation and error shaping. | 4.1-4.6, 5.1-5.4, 6.1-6.4, 7.1-7.5, 11.4 | `index`, `errors` | Service |
@@ -314,17 +314,16 @@ These three are file-and-data lookups, no diagram needed. `read_tweet` finds the
 
 | Field | Detail |
 |-------|--------|
-| Intent | Read `.env`, validate the required variables, return a frozen `Config`, and propagate the Anthropic env vars into `os.environ` so LiteLLM picks them up downstream. |
+| Intent | Read `.env`, validate the required variables, return a frozen `Config`, and propagate the OpenAI env vars into `os.environ` so the OpenAI SDK picks them up at client-construction time. |
 | Requirements | 2.1, 2.2, 2.3, 2.4, 2.5, 11.1 |
 
 **Responsibilities and constraints**
 - Reads `.env` from the project root (cwd at server startup) if present; otherwise reads from `os.environ` only.
-- Validates `ANTHROPIC_BASE_URL` is set and non-empty. Validates `ANTHROPIC_DEFAULT_OPUS_MODEL` is set and non-empty. Raises `ConfigError` with a message naming the missing variable otherwise.
-- `ANTHROPIC_AUTH_TOKEN` is optional; some local endpoints do not check it. Empty string and `None` are both acceptable.
+- Validates `OPENAI_BASE_URL` is set and non-empty. Validates `OPENAI_MODEL` is set and non-empty. Raises `ConfigError` with a message naming the missing variable otherwise.
+- `OPENAI_API_KEY` is optional; some local endpoints do not check it. Empty string and `None` are both acceptable.
 - Defaults `OUTPUT_DIR` to `output` if absent.
-- Returns a `Config` dataclass with `output_dir: Path`, `by_month_dir: Path`, `likes_json: Path`, `cache_path: Path`, `anthropic_base_url: str`, `anthropic_auth_token: str | None`, `anthropic_model: str`, `litellm_model_string: str`.
-- The `litellm_model_string` field is `f"anthropic/{anthropic_model}"`, constructed once so callers do not duplicate the prefix.
-- Side effect: `load_config` writes the resolved `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` (when set) into `os.environ` before returning, because LiteLLM reads them from there at the time PageIndex makes its reasoning call. The `.env` file is the source of truth; `os.environ` is the bridge.
+- Returns a `Config` dataclass with `output_dir: Path`, `by_month_dir: Path`, `likes_json: Path`, `cache_path: Path`, `openai_base_url: str`, `openai_api_key: str | None`, `openai_model: str`.
+- Side effect: `load_config` writes the resolved `OPENAI_BASE_URL` and `OPENAI_API_KEY` (when set) into `os.environ` before returning. The OpenAI SDK reads those variables from `os.environ` at the moment PageIndex's reasoning step instantiates its async client. The `.env` file is the source of truth; `os.environ` is the handoff.
 
 **Service interface**
 
@@ -339,10 +338,9 @@ class Config:
     by_month_dir: Path
     likes_json: Path
     cache_path: Path
-    anthropic_base_url: str
-    anthropic_auth_token: str | None
-    anthropic_model: str
-    litellm_model_string: str
+    openai_base_url: str
+    openai_api_key: str | None
+    openai_model: str
 
 class ConfigError(Exception):
     pass
@@ -351,13 +349,13 @@ def load_config(env_path: Path | None = None, env: dict[str, str] | None = None)
 ```
 
 - Preconditions: none. Both arguments default to the project layout; `env` lets tests skip the file read.
-- Postconditions: returns a fully populated `Config` or raises `ConfigError`. Anthropic env vars are present in `os.environ` after a successful return.
+- Postconditions: returns a fully populated `Config` or raises `ConfigError`. `OPENAI_BASE_URL` and `OPENAI_API_KEY` (when set) are present in `os.environ` after a successful return.
 - Invariants: `Config` is frozen.
 
 **Implementation notes**
 - The `.env` reader is stdlib: split lines, strip comments, parse `KEY=VALUE`, no shell quoting. `python-dotenv` is not added as a dep for three variables.
 - `cache_path` is `output_dir / "pageindex_cache.pkl"`.
-- If LiteLLM, at impl time, turns out to expect a different env var name for the Anthropic auth token (e.g. `ANTHROPIC_API_KEY`), `config.load_config` sets both names in `os.environ`. The user-facing variable in `.env` stays `ANTHROPIC_AUTH_TOKEN`; the bridge to LiteLLM is hidden inside `config`.
+- The OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when its client is constructed. `config.load_config` writes both into `os.environ` before any PageIndex call so the SDK picks them up directly. There is no protocol bridge to translate.
 
 ### Indexing Layer
 
@@ -373,7 +371,7 @@ def load_config(env_path: Path | None = None, env: dict[str, str] | None = None)
   1. Call `iter_monthly_markdown(config.by_month_dir)` to enumerate `.md` files. If the iterator yields nothing or the directory is missing, raise `IndexError("output/by_month/ is empty or missing")`.
   2. Compute `newest_md_mtime = max(p.stat().st_mtime for p in paths)`.
   3. If `config.cache_path` exists and `cache_path.stat().st_mtime >= newest_md_mtime`, load `(tree, side_table)` via `pickle.load`.
-  4. Otherwise, build a fresh `(tree, side_table)` by calling `_build_tree(paths, config.litellm_model_string)`, then `pickle.dump` to a `.tmp` and `os.replace` onto `cache_path`.
+  4. Otherwise, build a fresh `(tree, side_table)` by calling `_build_tree(paths, config.openai_model)`, then `pickle.dump` to a `.tmp` and `os.replace` onto `cache_path`.
   5. Call `load_export(config.likes_json)` and store the result as a `dict[str, Tweet]` keyed on `tweet.id`. Also retain the original `list[Tweet]` for `list_months` counts.
 - `search(query, year=None, month_start=None, month_end=None) -> list[SearchHit]`:
   1. Resolve the filter to a list of `YYYY-MM` strings or `None` for unfiltered.
@@ -428,7 +426,7 @@ class Index:
 - Invariants: `Index` is read-only after construction; methods do not mutate the tree or the tweet map.
 
 **Implementation notes**
-- The PageIndex call is wrapped in a single private method `_build_tree(paths, model_string)`. The wrapper takes a list of paths and a LiteLLM-style model string, returns `(tree, side_table)`, and has zero other responsibilities. This is the seam tests mock at the unit-test layer.
+- The PageIndex call is wrapped in a single private method `_build_tree(paths, model)`. The wrapper takes a list of paths and the OpenAI model name, returns `(tree, side_table)`, and has zero other responsibilities. This is the seam tests mock at the unit-test layer.
 - The query call is wrapped in `_query(tree_or_subtree, query) -> list[<pageindex match>]`. The unit tests mock this wrapper, not PageIndex itself.
 - The side-table maps each leaf section in the tree to a `tweet_id` via heading text matching. If a heading cannot be matched (e.g. handle missing for a deleted tweet), the entry is skipped; `search` returns the snippet without a `tweet_id`. Requirement 4.2 is satisfied even with skipped leaves: the result list includes the rest.
 - Cache invalidation is mtime-only. The cache file is rewritten atomically (write `.tmp`, then `os.replace`) so a crash mid-write does not corrupt the cache.
@@ -474,7 +472,7 @@ def read_tweet(index: Index, tweet_id: str) -> dict: ...
 - Invariants: handlers do not mutate `index`.
 
 **Implementation notes**
-- `search_likes` returns `[{"tweet_id": "...", "year_month": "...", "handle": "...", "snippet": "..."}, ...]`. Filter validation runs first; query validation second. A `ValueError` from `Index._resolve_filter` becomes `errors.invalid_input("filter", ...)`. A `RuntimeError` or any non-`ToolError` exception from `index.search` becomes `errors.upstream_failure(...)` so an LLM/network failure surfaces as a tool error, not a server crash.
+- `search_likes` returns `[{"tweet_id": "...", "year_month": "...", "handle": "...", "snippet": "..."}, ...]`. Filter validation runs first; query validation second. A `ValueError` from `Index._resolve_filter` becomes `errors.invalid_input("filter", ...)`. A `RuntimeError` or any non-`ToolError` exception from `index.search` becomes `errors.upstream_failure(...)` so an OpenAI SDK or network failure surfaces as a tool error, not a server crash.
 - `list_months` returns `[{"year_month": "...", "path": "...", "tweet_count": N}, ...]` in reverse chronological order. `tweet_count` may be `null`.
 - `get_month` returns the raw Markdown string. The MCP SDK's `TextContent` wrapping happens in `server.py`.
 - `read_tweet` returns `{"tweet_id", "handle", "display_name", "text", "created_at", "view_count", "like_count", "retweet_count", "url"}`. Fields the source `Tweet` does not have are omitted, not nulled.
@@ -577,7 +575,7 @@ The cache file is a pickled tuple `(tree, side_table)`. The exact `tree` shape i
 | 2.1 | `.env` provides LLM endpoint config. | `config` | `load_config` | Startup |
 | 2.2 | `OUTPUT_DIR` from `.env` (default `output`). | `config` | `load_config` | Startup |
 | 2.3 | Missing required env vars exits with named error. | `config`, `__main__` | validation | Startup |
-| 2.4 | Local Anthropic-compatible endpoint, no hosted by default. | `config`, README | `load_config` + docs | n/a |
+| 2.4 | Local OpenAI-compatible endpoint, no hosted by default. | `config`, README | `load_config` + docs | n/a |
 | 2.5 | `.env.sample` documents new vars. | `.env.sample` | file change | n/a |
 | 3.1 | First start builds and caches PageIndex tree. | `index` | `open_or_build` | Startup |
 | 3.2 | Fresh cache reused. | `index` | mtime check | Startup |
@@ -606,9 +604,9 @@ The cache file is a pickled tuple `(tree, side_table)`. The exact `tree` shape i
 | 8.1 | No writes under `by_month/` or `likes.json`. | `index`, `tools` | grep + behavior | n/a |
 | 8.2 | No imports of scraper network paths. | `index`, `tools` | grep-checkable | n/a |
 | 8.3 | No `cookies.json` access. | `config`, `index`, `tools` | grep-checkable | n/a |
-| 8.4 | LLM calls only via configured Anthropic endpoint. | `index`, `config` | startup | Startup |
+| 8.4 | LLM calls only via configured OpenAI-compatible endpoint. | `index`, `config` | startup | Startup |
 | 8.5 | Writes only to `output_dir` cache and stderr. | `index` | path constant | n/a |
-| 9.1 | `pytest` runs with no `ANTHROPIC_BASE_URL`, no real HTTP. | tests/mcp, conftest | network guard | n/a |
+| 9.1 | `pytest` runs with no `OPENAI_BASE_URL`, no real HTTP. | tests/mcp, conftest | network guard | n/a |
 | 9.2 | LLM and PageIndex tree builder mocked. | conftest | fixtures | n/a |
 | 9.3 | Integration test exercises all four tools. | `test_server_integration` | in-process server | end-to-end |
 | 9.4 | Real HTTP fails loudly. | conftest | network guard | n/a |
@@ -623,7 +621,7 @@ The cache file is a pickled tuple `(tree, side_table)`. The exact `tree` shape i
 | 11.3 | Filesystem changes picked up on restart. | `index` | mtime check | Startup |
 | 11.4 | Bad tool argument → input-validation error. | `tools`, `errors` | error path | n/a |
 
-Note on requirements coverage: requirements.md was updated alongside this design to align with the brief — it now references the three Anthropic env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`) and the structured-filter `search_likes(query, year=None, month_start=None, month_end=None)` signature. Requirement 4 was extended from 6 to 8 acceptance criteria to cover the structured filter and its validation; the additional rows in the traceability table account for those.
+Note on requirements coverage: requirements.md was updated alongside this design to align with the brief — it now references the three OpenAI-compatible env vars (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) and the structured-filter `search_likes(query, year=None, month_start=None, month_end=None)` signature. Requirement 4 was extended from 6 to 8 acceptance criteria to cover the structured filter and its validation; the additional rows in the traceability table account for those.
 
 ## Testing Strategy
 
@@ -631,7 +629,7 @@ Tests live under `tests/mcp/` so they are separable from Spec 1's `tests/`. Each
 
 ### Unit tests
 
-- `test_config.py` — `load_config` against an in-memory `env` dict, against a `.env` file fixture in `tmp_path`, missing `ANTHROPIC_BASE_URL` raises `ConfigError` naming the variable, missing `ANTHROPIC_DEFAULT_OPUS_MODEL` raises `ConfigError` naming the variable, default `OUTPUT_DIR` is `output`, `litellm_model_string` equals `f"anthropic/{anthropic_model}"`, `os.environ` carries the resolved Anthropic vars after a successful call. Covers Requirements 2.1, 2.2, 2.3, 2.4, 11.1.
+- `test_config.py` — `load_config` against an in-memory `env` dict, against a `.env` file fixture in `tmp_path`, missing `OPENAI_BASE_URL` raises `ConfigError` naming the variable, missing `OPENAI_MODEL` raises `ConfigError` naming the variable, default `OUTPUT_DIR` is `output`, `os.environ` carries the resolved `OPENAI_BASE_URL` and `OPENAI_API_KEY` after a successful call. Covers Requirements 2.1, 2.2, 2.3, 2.4, 11.1.
 - `test_index.py` — `Index.open_or_build` with mocked `_build_tree` against the fixture export. Cases: cache absent (build invoked, cache written), cache fresh (build not invoked, cache loaded), cache stale (touch one `.md` newer than the cache, rebuild invoked). `Index.open_or_build` against an empty `by_month/` raises `IndexError`. `Index.search("anything")` (unfiltered, mocked `_query`) returns `SearchHit` list. `Index.search("anything", year=2025, month_start="01", month_end="02")` only sees the in-range subtree (assert by spying on `_query`'s tree argument or by checking the resolved month list). `Index.search("anything", year=2025, month_start="01")` (single month) selects only `2025-01`. Filter validation errors (`year` missing while `month_start` set, `month_start` > `month_end`) raise `ValueError`. `Index.lookup_tweet` returns the right `Tweet` for a fixture ID and `None` for `"missing"`. `Index.list_months` returns `MonthInfo` list reverse-chronologically with correct counts. `Index.get_month_markdown` returns content for an existing month and `None` for a missing one. Covers 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.5, 5.1, 5.2, 5.3, 7.1, 7.2, 7.3.
 - `test_tools.py` — each handler with a mocked `Index`. `search_likes`: empty/whitespace `query` → `invalid_input`; valid `query` with mocked matches → list of dicts with the four expected keys; valid `query` plus full filter triple → handler passes filter through to `index.search`; bad filter (year-only-allowed rule violations) → `invalid_input`; `index.search` raising `RuntimeError` → `upstream_failure`. `list_months`: returns dict list with `year_month`, `path`, `tweet_count`. `get_month`: bad pattern → `invalid_input`; missing month → `not_found`; valid → returns the Markdown string. `read_tweet`: empty/non-numeric `tweet_id` → `invalid_input`; unknown id → `not_found`; valid → returns the metadata dict. Covers 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.3, 6.1, 6.2, 6.3, 7.1, 7.3, 7.4, 11.4.
 
@@ -656,12 +654,12 @@ These are additive; the existing `test_markdown_formatter_basic` and `test_markd
 
 `tests/mcp/conftest.py` does two things:
 
-1. An autouse fixture that monkeypatches the LLM-call entry point (the wrapper around LiteLLM that PageIndex calls during `_build_tree` and `_query`) to raise `RealLLMCallAttempted`. This is the equivalent of Spec 1's `responses` strict-mode guard. Requirements 9.1, 9.2, 9.4.
+1. An autouse fixture that monkeypatches the LLM-call entry point (the wrapper around the OpenAI SDK that PageIndex calls during `_build_tree` and `_query`) to raise `RealLLMCallAttempted`. This is the equivalent of Spec 1's `responses` strict-mode guard. Requirements 9.1, 9.2, 9.4.
 2. An autouse fixture that asserts no `cookies.json` access happens during a test run, either by setting an env variable that the `Config` honors as a "tests mode" hint or by patching a well-known path read. Requirement 9.5.
 
 ### Real-model verification (manual, not CI)
 
-The README documents how to verify against a real local LLM: start a local Anthropic-compatible server (a model exposed at `ANTHROPIC_BASE_URL` over Anthropic's API shape), set the three env vars, run `python -m x_likes_mcp`, register with Claude Code, ask a sample question (`search_likes("kernel scheduling")`, `search_likes("kernel scheduling", year=2025, month_start="03", month_end="05")`). Not gated in CI.
+The README documents how to verify against a real local LLM: start a local OpenAI-compatible server (a model exposed at `OPENAI_BASE_URL` on the `/v1/chat/completions` shape), set the three env vars, run `python -m x_likes_mcp`, register with Claude Code, ask a sample question (`search_likes("kernel scheduling")`, `search_likes("kernel scheduling", year=2025, month_start="03", month_end="05")`). Not gated in CI.
 
 ## Acceptance Mapping
 
@@ -680,7 +678,7 @@ The Requirements Traceability table above pairs each numeric requirement to the 
 - 6.1, 6.2, 6.3 → `test_tools.py::test_get_month_*`.
 - 7.1, 7.2, 7.3, 7.4 → `test_tools.py::test_read_tweet_*` and `test_index.py::test_lookup_tweet_*`.
 - 8.1, 8.2, 8.3, 8.5 → grep checks plus the cookies guard.
-- 8.4 → `test_config.py` plus `test_index.py` (model string is `anthropic/<model>`).
+- 8.4 → `test_config.py` plus `test_index.py` (model name is `OPENAI_MODEL`, OpenAI SDK reads base URL from env).
 - 9.1, 9.2, 9.4, 9.5 → `conftest.py` guards.
 - 9.3 → `test_server_integration.py`.
 - 9.6 → `pyproject.toml` review.
@@ -701,7 +699,7 @@ Confirmed: this spec does not trip any existing `.sentrux/rules.toml` boundary.
 - **Startup errors** (`ConfigError`, `IndexError`, `FileNotFoundError` on `likes.json`): printed to stderr in a single line, process exits with code 2 (Requirement 11.1).
 - **Input validation** (`ToolError(category="invalid_input", ...)`): MCP error response, server stays up. Used by all four tools for shape checks (Requirements 4.3, 6.2, 7.4, 11.4) and by `search_likes` filter validation.
 - **Not found** (`ToolError(category="not_found", ...)`): MCP error response, server stays up. Used by `get_month` and `read_tweet` for missing entities (Requirements 6.3, 7.3).
-- **Upstream failure** (`ToolError(category="upstream_failure", ...)`): MCP error response, server stays up. Used when PageIndex raises, when the LiteLLM call fails, or when any other unexpected exception bubbles up to the boundary (Requirements 4.4, 11.2).
+- **Upstream failure** (`ToolError(category="upstream_failure", ...)`): MCP error response, server stays up. Used when PageIndex raises, when the OpenAI SDK call fails, or when any other unexpected exception bubbles up to the boundary (Requirements 4.4, 11.2).
 
 ### Strategy
 
@@ -735,7 +733,7 @@ If startup latency becomes a real problem at much larger export sizes, per-month
 Single-user local tool. No auth, no multi-user concerns. Three safety properties:
 
 - Test fixtures contain no real credentials. The fixture `likes.json` and the per-month Markdown are hand-built with `@test_user` style placeholders.
-- The server never reads `cookies.json`, never imports a network code path from `x_likes_exporter` that hits X, and never calls a hosted LLM service unless the user explicitly points `ANTHROPIC_BASE_URL` at one.
+- The server never reads `cookies.json`, never imports a network code path from `x_likes_exporter` that hits X, and never calls a hosted LLM service unless the user explicitly points `OPENAI_BASE_URL` at one.
 - The pickle cache is a known concern in general but acceptable here: single-user, single-machine, written by this server, never crosses a trust boundary. If PageIndex publishes a JSON or other safer serialization at impl time, prefer that.
 
 ## Migration: `.env.sample` Update
@@ -743,13 +741,13 @@ Single-user local tool. No auth, no multi-user concerns. Three safety properties
 The existing `.env.sample` carries `X_USERNAME`, `X_USER_ID`, `COOKIES_FILE`, `OUTPUT_DIR`. Three lines are appended:
 
 ```
-# Anthropic-compatible LLM endpoint for the MCP server's reasoning step.
-# PageIndex routes through LiteLLM; LiteLLM honors these env vars when the
-# model string is anthropic/<model_name>. Local by default; setting this
-# to a hosted vendor is the user's choice.
-ANTHROPIC_BASE_URL=http://localhost:8080
-ANTHROPIC_AUTH_TOKEN=
-ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-5
+# OpenAI-compatible LLM endpoint for the MCP server's reasoning step.
+# PageIndex calls the OpenAI SDK directly; the SDK reads OPENAI_BASE_URL
+# and OPENAI_API_KEY from os.environ when constructing its async client.
+# Local by default; setting this to a hosted vendor is the user's choice.
+OPENAI_BASE_URL=http://localhost:8080
+OPENAI_API_KEY=
+OPENAI_MODEL=claude-opus-4-5
 ```
 
 Existing users do not need to migrate: `scrape.sh` does not consume the new variables. The MCP server is the only consumer.
@@ -757,12 +755,11 @@ Existing users do not need to migrate: `scrape.sh` does not consume the new vari
 ## Open Questions and Risks
 
 - **PageIndex API stability.** The exact shape of PageIndex's tree-build, query, and subtree-selection functions is the biggest unknown. The `Index` wrapper exists to absorb it. If at impl time PageIndex's interface looks meaningfully different, the wrapper grows; the four tool handlers do not change.
-- **LiteLLM env var naming for Anthropic.** The user-facing names are `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`; LiteLLM may internally expect different names (e.g. `ANTHROPIC_API_KEY`). `config.load_config` is the bridge: it sets whatever LiteLLM expects in `os.environ`, validated against LiteLLM's docs at impl time. The user only sees the documented three.
+- **OpenAI SDK env-var lifecycle.** `config.load_config` writes `OPENAI_BASE_URL` and `OPENAI_API_KEY` into `os.environ` before the first PageIndex call so the SDK picks them up at client-construction time. No bridge translation needed; the SDK's documented env-var contract is what PageIndex relies on.
 - **Subtree selection vs. ad-hoc tree assembly.** If PageIndex's API does not allow querying a subtree, building per-month subtrees at index time and assembling an ad-hoc tree at filter time is the fallback. Either way, the observable behavior of the structured filter is the same. Decision deferred to impl time.
 - **Tree-leaf to tweet-id mapping.** The side-table assumes PageIndex returns enough information per match to identify the source section. If it returns only a synthesized answer, the wrapper has to do more work — for example, asking PageIndex's reasoning step to include tweet IDs in its prompt template. Both fallbacks are acceptable.
 - **Empty `output/by_month/` after a fresh checkout.** A user who clones the repo but has not run `scrape.sh` hits Requirement 3.4 on first `python -m x_likes_mcp`. The error message is the documentation: "output/by_month/ is empty or missing — run scrape.sh first." Not a UX problem worth designing around.
 - **Existing `output/by_month/` was generated with the old h1.** The user re-runs `./scrape.sh --no-media --format markdown` once after the formatter change lands. The first MCP server build then sees the new shape. Documenting this in the README's MCP section is enough.
-- **LiteLLM Anthropic-provider env-var bridge.** Same point as the bullet above, restated: the user-facing names are `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`. If LiteLLM's Anthropic provider expects different names (e.g. `ANTHROPIC_API_KEY` instead of `ANTHROPIC_AUTH_TOKEN`), `config.load_config` writes the LiteLLM-expected names into `os.environ` before any LLM call. The bridge is one-way and lives in one function.
 
 ## Spec 1 Contract Concerns
 

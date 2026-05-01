@@ -20,7 +20,7 @@
   - _Depends: 1.1_
   - _Boundary: tests/test_formatters.py_
 
-- [ ] 1.3 Add MCP runtime deps and console script entry to `pyproject.toml`
+- [x] 1.3 Add MCP runtime deps and console script entry to `pyproject.toml`
   - Append `mcp>=1.0,<2.0` and `pageindex` (with whatever version pin is current at impl time) to `[project.dependencies]`
   - Add `x-likes-mcp = "x_likes_mcp.__main__:main"` under `[project.scripts]`
   - Extend `[tool.hatch.build.targets.wheel].packages` to include `x_likes_mcp`
@@ -29,7 +29,7 @@
   - _Requirements: 1.4, 9.6_
   - _Boundary: pyproject.toml_
 
-- [ ] 1.4 Create the `x_likes_mcp/` package skeleton
+- [x] 1.4 Create the `x_likes_mcp/` package skeleton
   - Create `x_likes_mcp/__init__.py` defining `__version__ = "0.1.0"` and a one-line module docstring
   - Create empty (placeholder) module files: `config.py`, `errors.py`, `index.py`, `tools.py`, `server.py`, `__main__.py`
   - `__main__.py` contains `def main() -> int: return 0` and the `if __name__ == "__main__": sys.exit(main())` guard so the module is runnable
@@ -37,24 +37,24 @@
   - _Requirements: 1.1, 1.2_
   - _Boundary: x_likes_mcp/_
 
-- [ ] 1.5 Extend `.env.sample` with the three new Anthropic-compatible variables
-  - Append `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL` entries with comments stating the endpoint is local Anthropic-compatible by default and that PageIndex routes through LiteLLM with model string `anthropic/<model_name>`
-  - Default value for `ANTHROPIC_BASE_URL` is `http://localhost:8080`; default for `ANTHROPIC_AUTH_TOKEN` is empty; default for `ANTHROPIC_DEFAULT_OPUS_MODEL` is a placeholder model name (e.g. `claude-opus-4-5`)
-  - Observable completion: `grep ANTHROPIC_BASE_URL .env.sample`, `grep ANTHROPIC_AUTH_TOKEN .env.sample`, and `grep ANTHROPIC_DEFAULT_OPUS_MODEL .env.sample` all match
+- [x] 1.5 Extend `.env.sample` with the three new OpenAI-compatible variables
+  - Append `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` entries with comments stating the endpoint is local OpenAI-compatible by default and that PageIndex's reasoning step uses the OpenAI Python SDK (which reads `OPENAI_BASE_URL` from the process environment automatically)
+  - Default value for `OPENAI_BASE_URL` is `http://localhost:8080`; default for `OPENAI_API_KEY` is empty; default for `OPENAI_MODEL` is a placeholder model name (e.g. `claude-opus-4-5`)
+  - Observable completion: `grep OPENAI_BASE_URL .env.sample`, `grep OPENAI_API_KEY .env.sample`, and `grep OPENAI_MODEL .env.sample` all match
   - _Requirements: 2.5, 2.4_
   - _Boundary: .env.sample_
 
 ## 2. Configuration and error layers
 
 - [ ] 2.1 (P) Implement `config.py` with `.env` reader and `Config` dataclass
-  - Define frozen `Config` dataclass with the fields documented in design.md (`output_dir`, `by_month_dir`, `likes_json`, `cache_path`, `anthropic_base_url`, `anthropic_auth_token`, `anthropic_model`, `litellm_model_string`)
+  - Define frozen `Config` dataclass with the fields documented in design.md (`output_dir`, `by_month_dir`, `likes_json`, `cache_path`, `openai_base_url`, `openai_api_key`, `openai_model`, `openai_model`)
   - Implement a stdlib `.env` reader (split on `=`, strip comments and whitespace, no shell-quote handling)
-  - Implement `load_config(env_path=None, env=None)` that reads `.env` from cwd by default, falls back to `os.environ`, and validates that `ANTHROPIC_BASE_URL` and `ANTHROPIC_DEFAULT_OPUS_MODEL` are set and non-empty
+  - Implement `load_config(env_path=None, env=None)` that reads `.env` from cwd by default, falls back to `os.environ`, and validates that `OPENAI_BASE_URL` and `OPENAI_MODEL` are set and non-empty
   - Raise `ConfigError` naming the missing variable when validation fails
-  - `litellm_model_string` is `f"anthropic/{anthropic_model}"`, computed once
+  - `openai_model` is just `openai_model`, computed once
   - Default `OUTPUT_DIR` to `"output"`; derive `by_month_dir`, `likes_json`, `cache_path` from `output_dir`
-  - Side effect: write `ANTHROPIC_BASE_URL` (and `ANTHROPIC_AUTH_TOKEN` if set) into `os.environ` before returning so LiteLLM picks them up at PageIndex call time. If LiteLLM, at impl time, expects a different env var name internally for the auth token, set both names
-  - Observable completion: importing `load_config` and calling it against an in-memory `env` dict returns a populated `Config` whose `litellm_model_string` starts with `"anthropic/"`; calling without `ANTHROPIC_BASE_URL` raises `ConfigError` whose message contains the string `ANTHROPIC_BASE_URL`; after a successful call, `os.environ["ANTHROPIC_BASE_URL"]` matches the configured value
+  - Side effect: write `OPENAI_BASE_URL` (and `OPENAI_API_KEY` if set) into `os.environ` before returning so the OpenAI SDK picks them up at client-construction time
+  - Observable completion: importing `load_config` and calling it against an in-memory `env` dict returns a populated `Config` whose `openai_model` equals the configured model name; calling without `OPENAI_BASE_URL` raises `ConfigError` whose message contains the string `OPENAI_BASE_URL`; after a successful call, `os.environ["OPENAI_BASE_URL"]` matches the configured value
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 11.1_
   - _Boundary: x_likes_mcp/config.py_
 
@@ -81,10 +81,10 @@
   - _Boundary: x_likes_mcp/index.py_
 
 - [ ] 3.2 Implement the PageIndex tree builder seam (`_build_tree`)
-  - Implement `_build_tree(paths, model_string)` calling PageIndex's tree-build entry point with the file paths and the LiteLLM-style model string `anthropic/<model>`; return `(tree, side_table)`
+  - Implement `_build_tree(paths, model_string)` calling PageIndex's tree-build entry point with the file paths and the model string the configured model name; return `(tree, side_table)`
   - Build the side-table by walking the resulting tree's leaf sections and matching their heading text against the in-memory `Tweet` list to record `(node_key -> tweet_id)`
   - When a leaf cannot be matched to a tweet, skip it (do not raise); log a single line to stderr
-  - Observable completion: against the fixture export with PageIndex's tree-build mocked to return a known-shape fake tree, `_build_tree` returns a tuple where the side-table maps at least one leaf to one of the fixture tweet IDs; the exact `model_string` passed to PageIndex is `"anthropic/<the configured model>"`
+  - Observable completion: against the fixture export with PageIndex's tree-build mocked to return a known-shape fake tree, `_build_tree` returns a tuple where the side-table maps at least one leaf to one of the fixture tweet IDs; the exact `model_string` passed to PageIndex is `the configured model name`
   - _Requirements: 3.1, 4.1, 4.2, 8.4_
   - _Depends: 3.1_
   - _Boundary: x_likes_mcp/index.py_
@@ -152,7 +152,7 @@
   - Replace the placeholder `main()` with the real pipeline: `load_config()` → `Index.open_or_build(config)` → `server.run(index)` → return 0
   - Catch `ConfigError`, `IndexError`, `FileNotFoundError` at the top of `main`; print one stderr line naming the failing condition; return exit code 2
   - Other exceptions during startup propagate (intentional: real bugs surface as tracebacks)
-  - Observable completion: with a fixture export and a mocked LLM, running `python -m x_likes_mcp` against a temp `.env` (`ANTHROPIC_BASE_URL=http://fake`, `ANTHROPIC_DEFAULT_OPUS_MODEL=fake-model`) starts the SDK stdio loop without raising; running it without `ANTHROPIC_BASE_URL` exits non-zero and prints a stderr line containing `ANTHROPIC_BASE_URL`
+  - Observable completion: with a fixture export and a mocked LLM, running `python -m x_likes_mcp` against a temp `.env` (`OPENAI_BASE_URL=http://fake`, `OPENAI_MODEL=fake-model`) starts the SDK stdio loop without raising; running it without `OPENAI_BASE_URL` exits non-zero and prints a stderr line containing `OPENAI_BASE_URL`
   - _Requirements: 1.1, 1.2, 1.5, 11.1_
   - _Depends: 2.1, 3.1, 5.1_
   - _Boundary: x_likes_mcp/__main__.py_
@@ -163,20 +163,20 @@
   - Create `tests/mcp/__init__.py`, `tests/mcp/conftest.py`, and `tests/mcp/fixtures/` directory
   - Hand-build `tests/mcp/fixtures/by_month/likes_2025-01.md`, `likes_2025-02.md`, `likes_2025-03.md` matching the post-change formatter layout (`## YYYY-MM`, `### @handle`, the per-tweet block; no global h1); under 50 lines each
   - Hand-build `tests/mcp/fixtures/likes.json` with four tweets across the three months whose IDs match what is referenced in the per-month files
-  - In `conftest.py`, declare an autouse fixture that monkeypatches the LLM call entry point (the wrapper around LiteLLM that PageIndex calls during `_build_tree` and `_query`) to raise `RealLLMCallAttempted` so any unmocked test fails loudly
-  - Declare a fixture `fake_export(tmp_path)` that copies `tests/mcp/fixtures/` into a temp dir and returns the resulting `Config` (with `ANTHROPIC_BASE_URL="http://fake"`, `ANTHROPIC_DEFAULT_OPUS_MODEL="fake-model"`)
+  - In `conftest.py`, declare an autouse fixture that monkeypatches the LLM call entry point (the OpenAI SDK call entry point that PageIndex calls during `_build_tree` and `_query`) to raise `RealLLMCallAttempted` so any unmocked test fails loudly
+  - Declare a fixture `fake_export(tmp_path)` that copies `tests/mcp/fixtures/` into a temp dir and returns the resulting `Config` (with `OPENAI_BASE_URL="http://fake"`, `OPENAI_MODEL="fake-model"`)
   - Declare an autouse fixture that asserts no `cookies.json` access happens during a test run (set an env var that `Config` honors as a tests-mode hint, or patch a known path read)
   - Observable completion: `pytest tests/mcp -k nothing` collects with no errors and zero tests run; `RealLLMCallAttempted` is importable from `tests.mcp.conftest`; the `fake_export` fixture, when used in a smoke test, returns a `Config` whose `by_month_dir` contains exactly the three fixture files
   - _Requirements: 9.1, 9.2, 9.4, 9.5_
   - _Boundary: tests/mcp/_
 
 - [ ] 6.2 (P) Write `test_config.py`
-  - Test that `load_config(env={"ANTHROPIC_BASE_URL": "x", "ANTHROPIC_DEFAULT_OPUS_MODEL": "m"})` returns a `Config` with the expected paths and `litellm_model_string == "anthropic/m"`
-  - Test that `load_config(env={"ANTHROPIC_BASE_URL": "x"})` raises `ConfigError` whose message contains `"ANTHROPIC_DEFAULT_OPUS_MODEL"`
-  - Test that `load_config(env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "m"})` raises `ConfigError` whose message contains `"ANTHROPIC_BASE_URL"`
+  - Test that `load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})` returns a `Config` with the expected paths and `openai_model == "m"`
+  - Test that `load_config(env={"OPENAI_BASE_URL": "x"})` raises `ConfigError` whose message contains `"OPENAI_MODEL"`
+  - Test that `load_config(env={"OPENAI_MODEL": "m"})` raises `ConfigError` whose message contains `"OPENAI_BASE_URL"`
   - Test that `OUTPUT_DIR` defaults to `"output"` when absent
   - Test that the `.env` file path code path reads a temp `.env` correctly (file with the three Anthropic vars plus comment lines)
-  - Test that after a successful `load_config`, `os.environ["ANTHROPIC_BASE_URL"]` matches the configured value
+  - Test that after a successful `load_config`, `os.environ["OPENAI_BASE_URL"]` matches the configured value
   - Observable completion: `pytest tests/mcp/test_config.py -v` shows green across all six tests
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 11.1_
   - _Depends: 2.1, 6.1_
@@ -185,7 +185,7 @@
 - [ ] 6.3 (P) Write `test_index.py`
   - Test `Index.open_or_build` against the fixture export with `_build_tree` mocked to return a known-shape fake tree: cache absent → builds and writes cache; cache fresh (mtime newer than all `.md`) → loads cache and does not call the builder; cache stale (touch one `.md` newer than cache) → rebuilds (assert via call counter on the mock)
   - Test `Index.open_or_build` against an empty `by_month/` raises `IndexError`
-  - Test `_build_tree` receives a `model_string` of the form `"anthropic/<model>"`
+  - Test `_build_tree` receives a `model_string` equals the configured `OPENAI_MODEL` value
   - Test `Index.search("anything")` (filter unset) calls `_query` with the full tree and returns the mocked `SearchHit` list
   - Test `Index.search("anything", year=2025, month_start="01", month_end="02")` causes `_query` to be called with a tree narrowed to the two in-range months (assert by spying on the captured tree argument or on the resolved month list)
   - Test `Index.search("anything", year=2025)` resolves to the full year's months
@@ -226,11 +226,11 @@
   - Add a new section after the existing usage section titled "MCP Server"
   - Include `.mcp.json` snippet showing the `command`/`args` shape Claude Code expects (`uv run x-likes-mcp` or `python -m x_likes_mcp`)
   - Include the equivalent `claude mcp add` invocation
-  - List the three new `.env` variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`) and state that the endpoint is local Anthropic-compatible by default and that PageIndex routes through LiteLLM with model string `anthropic/<model_name>`
+  - List the three new `.env` variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) and state that the endpoint is local OpenAI-compatible by default and that PageIndex's reasoning step uses the OpenAI Python SDK (which reads `OPENAI_BASE_URL` from the process environment automatically)
   - List the prerequisite that `scrape.sh` has been run at least once and that, after upgrading from a previous version, `./scrape.sh --no-media --format markdown` should be re-run once so per-month files reflect the new (h1-less) shape
   - List the four tools with one-line summaries; for `search_likes`, document the optional `year` / `month_start` / `month_end` filter fields and explain that the filter pre-selects which markdown PageIndex sees
   - State that the server is stdio-only and that hosted LLM endpoints are not used by default
-  - Document the manual real-LLM verification path (start a local Anthropic-compatible LLM, set env, run server, ask a sample question with and without the structured filter)
+  - Document the manual real-LLM verification path (start a local OpenAI-compatible LLM, set env, run server, ask a sample question with and without the structured filter)
   - Observable completion: `grep "MCP Server" README.md` matches; `grep "claude mcp add" README.md` matches; the section names all four tools; the section names the three Anthropic env variables
   - _Requirements: 10.1, 10.2, 10.3, 10.4_
   - _Depends: 5.2_
@@ -240,7 +240,7 @@
 
 - [ ] 8.1 Run the full test suite end-to-end and verify Spec 1's tests still pass alongside this spec's
   - Run `pytest` from the repo root and confirm both `tests/` (Spec 1) and `tests/mcp/` collect and pass
-  - Run `python -m x_likes_mcp` against the existing `output/` directory with a temp `.env` that has `ANTHROPIC_BASE_URL=http://localhost:1234`, `ANTHROPIC_DEFAULT_OPUS_MODEL=any` (no real server needed; startup ends at the SDK stdio loop, send EOF on stdin to exit cleanly)
+  - Run `python -m x_likes_mcp` against the existing `output/` directory with a temp `.env` that has `OPENAI_BASE_URL=http://localhost:1234`, `OPENAI_MODEL=any` (no real server needed; startup ends at the SDK stdio loop, send EOF on stdin to exit cleanly)
   - Verify `cookies.json` is not opened during the test run (rely on the conftest guard)
   - Confirm `sentrux scan` still passes against `.sentrux/rules.toml` (no new boundary violations)
   - Observable completion: `pytest` exit code 0 with both test trees green; `python -m x_likes_mcp` starts the loop and exits cleanly on EOF; no `cookies.json` access during tests; `sentrux scan` produces no new boundary violations relative to the pre-spec baseline
@@ -250,10 +250,10 @@
 
 ## 9. Manual smoke (not gated in CI)
 
-- [ ] 9.1 Manual end-to-end smoke against a real local Anthropic-compatible LLM
+- [ ] 9.1 Manual end-to-end smoke against a real local OpenAI-compatible LLM
   - Re-run `./scrape.sh --no-media --format markdown` once so `output/by_month/` reflects the new (h1-less) shape
-  - Start a local Anthropic-compatible LLM endpoint (whatever the user runs locally — llama.cpp/ollama/etc., as long as it speaks Anthropic's API)
-  - Set `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL` in `.env`
+  - Start a local OpenAI-compatible LLM endpoint (whatever the user runs locally — llama.cpp/ollama/etc., as long as it speaks Anthropic's API)
+  - Set `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` in `.env`
   - Run `python -m x_likes_mcp` from the project root and register it with Claude Code via `claude mcp add` or `.mcp.json`
   - Issue at least three queries from the MCP client: an open-ended `search_likes(query)`, a year-scoped `search_likes(query, year=2025)`, and a 3-month range `search_likes(query, year=2025, month_start="03", month_end="05")`; confirm sensible answers and visibly faster responses on the filtered queries
   - Issue one `list_months`, one `get_month`, and one `read_tweet` and confirm the responses match what is on disk

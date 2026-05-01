@@ -23,6 +23,8 @@ dependencies = [
     "pandas>=2.0.0",
     "Pillow>=10.0.0",
     "tqdm>=4.66.0",
+    "mcp>=1.0,<2.0",
+    "pageindex",
 ]
 
 [project.urls]
@@ -30,6 +32,7 @@ Repository = "https://github.com/norandom/x_likes_scraper"
 
 [project.scripts]
 x-likes-export = "cli:main"
+x-likes-mcp = "x_likes_mcp.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -42,4 +45,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["x_likes_exporter"]
+packages = ["x_likes_exporter", "x_likes_mcp"]
