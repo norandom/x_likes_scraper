@@ -113,14 +113,14 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 8.3, 9.1, 9.2, 9.3, 9.4, 9.5_
   - _Boundary: formatters_
 
-- [ ] 8. Write the network-mocked tests for the auth and client layers
+- [x] 8. Write the network-mocked tests for the auth and client layers
 - [x] 8.1 `test_auth.py`
   - Cases (each uses `@responses.activate`): register `https://x.com/home` returning `home_page.html` and the script URL it references returning `main_script.js`; assert `XAuthenticator.get_bearer_token()` returns the placeholder bearer literal in the script; register a home page with no `<link>` matching the pattern and assert the call raises with a clear message; register a main script with no bearer literal and assert the call raises with a clear message; call `get_bearer_token()` twice and assert exactly one network round-trip occurred (cache reuse); call `get_query_id('Likes')` twice and assert the same.
   - Observable: `pytest tests/test_auth.py -v` reports all cases passing; the cache-reuse case asserts `len(responses.calls) == 2` (one home, one script) after the second `get_bearer_token` invocation.
   - _Requirements: 5.3, 5.4, 5.5, 5.6_
   - _Boundary: auth_
 
-- [ ] 8.2 `test_client.py`
+- [x] 8.2 `test_client.py`
   - Cases (each uses `@responses.activate`, with `XAPIClient` constructed against a `CookieManager` pointing at `tests/fixtures/cookies_valid.json` and an authenticator stubbed to return placeholder bearer / queryId without network calls): register the Likes endpoint returning `likes_page_success.json` with rate-limit headers populated and assert `fetch_likes` returns the expected tweets, next cursor, and rate-limit info; register the Likes endpoint returning `likes_page_empty.json` and assert an empty list with no raise; register the endpoint returning HTTP 429 and assert `fetch_likes` raises with a rate-limit message; register HTTP 401 and assert it raises with an authentication message; register a sequence of two pages followed by a no-cursor terminator and assert `fetch_all_likes` stops after the terminator and returns the merged tweet list; register a response whose `x-rate-limit-remaining` header is `0` and assert the wait-and-checkpoint branch is exercised (assert by stubbing `time.sleep` and `checkpoint_callback` and checking they were invoked).
   - Observable: `pytest tests/test_client.py -v` reports all cases passing; the pagination case asserts the request count matches the expected page count; no test triggers a real `ConnectionError` from the conftest network guard.
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
