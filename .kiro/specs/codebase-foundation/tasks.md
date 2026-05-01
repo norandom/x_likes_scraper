@@ -4,8 +4,8 @@ This plan implements the design in three layers: refactor production code so it 
 
 The ordering follows the Refactor Sequencing section of the design. Steps 1-4 are the production-code refactor (must keep `scrape.sh` working at every step). Step 5 sets up dev dependencies. Steps 6-9 build the test suite. Step 10 records the sentrux signal.
 
-- [ ] 1. Add the date-parse helper as a leaf module
-- [ ] 1.1 Create `dates.py` with `parse_x_datetime`
+- [x] 1. Add the date-parse helper as a leaf module
+- [x] 1.1 Create `dates.py` with `parse_x_datetime`
   - Add `x_likes_exporter/dates.py` with the `X_CREATED_AT_FORMAT` constant and a `parse_x_datetime(value: str) -> Optional[datetime]` function that uses `datetime.strptime` and returns `None` on any failure (empty string, wrong format, non-string input).
   - The helper does not raise; all error paths return `None`.
   - Observable: `python -c "from x_likes_exporter.dates import parse_x_datetime; print(parse_x_datetime('Sun Nov 09 11:05:17 +0000 2025'))"` prints a `datetime` object, and the same call with `''` prints `None`.
