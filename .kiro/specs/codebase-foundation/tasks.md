@@ -133,8 +133,8 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 6.4, 6.5_
   - _Boundary: exporter, checkpoint_
 
-- [ ] 10. Validate the sentrux signal direction
-- [ ] 10.1 Run sentrux scan and record the result
+- [x] 10. Validate the sentrux signal direction
+- [x] 10.1 Run sentrux scan and record the result
   - Run `sentrux scan` from the repo root after all preceding tasks land.
   - Compare the redundancy axis to the pre-spec baseline of 7625 and the overall signal to the pre-spec baseline of 6469.
   - Record the new numbers (e.g. in the spec's research notes or a follow-up commit message); do not silently treat a regression on either axis as acceptable.
