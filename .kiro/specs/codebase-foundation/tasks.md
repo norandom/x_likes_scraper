@@ -56,7 +56,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Boundary: pyproject_
 
 - [ ] 6. Set up the test infrastructure
-- [ ] 6.1 Create `tests/` skeleton with `conftest.py` and a network guard
+- [x] 6.1 Create `tests/` skeleton with `conftest.py` and a network guard
   - Create `tests/__init__.py` and `tests/conftest.py`.
   - In `conftest.py`, configure an autouse session fixture that activates `responses` in strict mode so any unregistered URL raises `ConnectionError`.
   - Add a session-scoped fixture that asserts no `cookies.json` exists at the project root during the test run, or patches `CookieManager._load_cookies` to a no-op so accidental construction does not read the file.
