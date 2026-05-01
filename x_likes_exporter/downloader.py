@@ -61,7 +61,11 @@ class MediaDownloader:
         Returns:
             Local file path or None if download failed
         """
-        # Determine the URL to download
+        # Skip if a file for this tweet+index is already on disk; allows cheap reruns
+        existing = next(self.output_dir.glob(f"{tweet_id}_{index}.*"), None)
+        if existing is not None:
+            return str(existing)
+
         download_url = media.media_url or media.url
 
         if not download_url:

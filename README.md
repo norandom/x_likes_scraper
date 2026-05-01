@@ -11,55 +11,49 @@ Export your liked tweets from X (formerly Twitter) to JSON, CSV, a Pandas DataFr
 - Walks the cursor-based pagination so you get every like, not just the first page.
 - Runs locally. Your cookies and tweets never leave the machine.
 
-## Installation
+## Requirements
 
-```bash
-# Clone or download this repository
-cd x_likes_exporter_py
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Or install as a package
-pip install -e .
-```
-
-### Requirements
-
-- Python 3.8+
-- requests
-- pandas
-- beautifulsoup4
-- Pillow
-- tqdm
-- python-dateutil
+Python 3.8+, plus `requests`, `pandas`, `beautifulsoup4`, `Pillow`, `tqdm`, `python-dateutil` (all in `requirements.txt`). Install with `pip install -r requirements.txt`, or `pip install -e .` to install as a package.
 
 ## Quick start
 
-### 1. Export your cookies
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
 
-You need your X cookies to authenticate against the API.
+# 2. Drop your exported cookies in the project root
+#    (see "Exporting cookies" below for how)
+cp /path/to/cookies.json .
 
-#### With a browser extension
+# 3. Configure your account
+cp .env.sample .env
+$EDITOR .env       # fill in X_USER_ID (and X_USERNAME for your own reference)
 
-1. Install one:
-   - Chrome/Edge: [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)
-   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-2. Go to [x.com](https://x.com) while logged in.
-3. Export cookies as JSON.
-4. Save the file as `cookies.json`.
+# 4. Run it
+./scrape.sh
+```
 
-#### Manually
+That's it. `scrape.sh` reads `.env`, activates `venv/` if present, and runs the exporter with `--resume` so an interrupted run picks up where it left off. Anything you pass after `./scrape.sh` is forwarded to `cli.py`:
 
-1. Open DevTools (F12) on [x.com](https://x.com).
-2. Go to Application → Cookies → https://x.com.
-3. Copy the values for these cookies:
-   - `ct0` (the CSRF token)
-   - `auth_token`
-4. Put them into a `cookies.json` file (format below).
+```bash
+./scrape.sh --no-media         # skip media download
+./scrape.sh --stats            # print stats at the end
+./scrape.sh --format markdown  # only the per-month Markdown
+```
+
+### Exporting cookies
+
+You need your X session cookies to authenticate. Two options.
+
+**With a browser extension** — install one, log in to [x.com](https://x.com), export cookies as JSON, save as `cookies.json`:
+
+- Chrome/Edge: [Cookie-Editor](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)
+- Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+
+**Manually** — open DevTools (F12) on x.com → Application → Cookies → https://x.com, then copy `ct0` (CSRF token) and `auth_token` into a `cookies.json` file matching the format below.
 
 <details>
-<summary>cookies.json Format</summary>
+<summary>cookies.json format</summary>
 
 ```json
 [
@@ -84,70 +78,39 @@ You need your X cookies to authenticate against the API.
 
 </details>
 
-### 2. Find your user ID
+### Finding your user ID
 
-The exporter needs the numeric user ID, not the @handle.
-
-From the page source: open your profile, view source, search for `data-user-id`, copy the number.
-
-Or via tweeterid:
+`X_USER_ID` is the numeric ID, not the @handle. Look it up at [tweeterid.com](https://tweeterid.com/), or via:
 
 ```bash
 curl "https://tweeterid.com/ajax.php?username=YOUR_USERNAME"
 ```
 
-### 3. Run it
+### Calling the CLI directly
 
-#### From the CLI
+`scrape.sh` is just a wrapper. If you'd rather invoke `cli.py` yourself:
 
 ```bash
-# Export to all formats
-python cli.py cookies.json YOUR_USER_ID
-
-# Resume an interrupted export
 python cli.py cookies.json YOUR_USER_ID --resume
-
-# Export only to JSON and Markdown (Markdown will be split by month by default)
-python cli.py cookies.json YOUR_USER_ID --format json --format markdown
-
-# Export markdown as single file instead of splitting by month
-python cli.py cookies.json YOUR_USER_ID --format markdown --single-file
-
-# Skip media download (faster)
 python cli.py cookies.json YOUR_USER_ID --no-media
-
-# Custom output directory
-python cli.py cookies.json YOUR_USER_ID --output my_export
-
-# Show statistics
-python cli.py cookies.json YOUR_USER_ID --stats
+python cli.py cookies.json YOUR_USER_ID --format json --format markdown
+python cli.py cookies.json YOUR_USER_ID --format markdown --single-file
 ```
 
-#### From Python
+### From Python
 
 ```python
 from x_likes_exporter import XLikesExporter
 
-# Initialize
-exporter = XLikesExporter(
-    cookies_file="cookies.json",
-    output_dir="output"
-)
+exporter = XLikesExporter(cookies_file="cookies.json", output_dir="output")
 
-# Fetch all likes
 tweets = exporter.fetch_likes(
     user_id="YOUR_USER_ID",
     download_media=True,
-    resume=True  # picks up from checkpoint if one exists
+    resume=True,
 )
 
-# Export to all formats
 exporter.export_all()
-
-# Or export selectively
-exporter.export_json()
-exporter.export_markdown()
-exporter.export_csv()
 ```
 
 ## Resume
