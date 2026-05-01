@@ -67,7 +67,7 @@
 
 ## 3. Indexing layer
 
-- [ ] 3.1 Implement `Index` data containers and the build-or-load skeleton
+- [x] 3.1 Implement `Index` data containers and the build-or-load skeleton
   - Define `SearchHit` and `MonthInfo` frozen dataclasses with the fields documented in design.md
   - Define `IndexError(Exception)`
   - Implement `Index.__init__` accepting the tree, side-table, tweet map, paths-by-month map, and config; mark instance attributes as read-only by convention
