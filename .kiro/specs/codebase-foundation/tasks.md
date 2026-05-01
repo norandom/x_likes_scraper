@@ -47,8 +47,8 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 7.3, 7.6_
   - _Boundary: loader, __init___
 
-- [ ] 5. Set up the dev dependency group
-- [ ] 5.1 Add `[dependency-groups].dev` to `pyproject.toml`
+- [x] 5. Set up the dev dependency group
+- [x] 5.1 Add `[dependency-groups].dev` to `pyproject.toml`
   - Add a `[dependency-groups]` section with a `dev` array containing `pytest>=8.0` and `responses>=0.25`. Do not modify `[project.dependencies]`.
   - Run `uv sync --group dev` and confirm both packages install into the dev environment.
   - Observable: `uv pip list | grep -E "pytest|responses"` prints both names; `grep -A 5 "\[project\]" pyproject.toml | grep dependencies` shows the same runtime dependencies as before.

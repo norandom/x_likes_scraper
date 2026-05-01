@@ -33,6 +33,12 @@ Repository = "https://github.com/norandom/x_likes_scraper"
 [project.scripts]
 x-likes-export = "cli:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
