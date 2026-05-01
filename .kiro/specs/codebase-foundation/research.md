@@ -49,3 +49,25 @@ The headline win is **redundancy**: raw rate dropped from 24% to 13% (the score 
 ## Verdict
 
 Signal direction: **up** (6469 → 6666). Both axes the spec named — redundancy and the overall signal — moved in the intended direction with no regression elsewhere. Spec passes its own success criterion.
+
+## Follow-up maintenance sweep (post-spec)
+
+After the spec landed, ran a second pass driven by sentrux's `check_rules`:
+
+- Removed two unused runtime deps (`python-dateutil`, `beautifulsoup4`) — neither was imported anywhere after the date-parse consolidation.
+- Added `.sentrux/rules.toml` codifying the four-layer model (leaf, parsing, io, orchestration) plus boundary rules locking in the loader's cookies-free contract. The rules file is what the upcoming mcp-pageindex spec gets gated against.
+- Extracted `LIKES_API_FEATURES` from `XAPIClient.fetch_likes` into a module-level constant; the function dropped from 141 lines to under 30.
+- Split `cli.py:main` (206 lines) into `_build_parser`, `_show_checkpoint_info`, `_clear_checkpoint`, `_resolve_formats`, `_run_exports`, `_print_stats`, with `main` now ~50 lines of orchestration.
+
+Final sentrux state:
+
+```
+quality_signal: 6723   (was 6666 / 6469 baseline)
+redundancy:     8758   (raw 0.124)
+equality:       5292   (raw 0.471 — improved by cli split)
+modularity:     3333   (unchanged — project size constraint)
+depth:          8889   (unchanged)
+acyclicity:    10000   (unchanged)
+
+check_rules: PASS (4 of 13 rules checked on free tier; 0 violations)
+```

@@ -1,0 +1,80 @@
+# Architectural rules for x_likes_exporter.
+# Verified by `sentrux check` or the `check_rules` MCP tool.
+#
+# Layer model (lower order = closer to leaf; higher layers may depend on
+# lower layers only):
+#   0  leaf:           dates, models
+#   1  parsing:        parser  (transforms API dicts to model objects)
+#   2  io:             cookies, auth, client, downloader, checkpoint, loader
+#   3  orchestration:  exporter, formatters
+#
+# Boundary rules below lock in the specific seams the codebase-foundation
+# spec promised — most importantly, that `loader` is the cookies-free read
+# API the upcoming mcp-pageindex spec consumes.
+
+[constraints]
+max_cycles = 0           # zero circular imports
+max_cc = 25              # cap per-function cyclomatic complexity
+max_fn_lines = 100       # cap per-function length
+no_god_files = false     # allow god files for now
+
+[[layers]]
+name = "leaf"
+paths = ["x_likes_exporter/dates.py", "x_likes_exporter/models.py"]
+order = 0
+
+[[layers]]
+name = "parsing"
+paths = ["x_likes_exporter/parser.py"]
+order = 1
+
+[[layers]]
+name = "io"
+paths = [
+  "x_likes_exporter/cookies.py",
+  "x_likes_exporter/auth.py",
+  "x_likes_exporter/client.py",
+  "x_likes_exporter/downloader.py",
+  "x_likes_exporter/checkpoint.py",
+  "x_likes_exporter/loader.py",
+]
+order = 2
+
+[[layers]]
+name = "orchestration"
+paths = ["x_likes_exporter/exporter.py", "x_likes_exporter/formatters.py"]
+order = 3
+
+# Loader must stay read-only and cookies-free so external consumers
+# (the upcoming MCP server, future tools) can use it without dragging
+# in the auth / network surface.
+[[boundaries]]
+from = "x_likes_exporter/loader.py"
+to = "x_likes_exporter/cookies.py"
+reason = "Loader is the cookies-free read API; cookies belong to the auth flow"
+
+[[boundaries]]
+from = "x_likes_exporter/loader.py"
+to = "x_likes_exporter/auth.py"
+reason = "Loader does not authenticate"
+
+[[boundaries]]
+from = "x_likes_exporter/loader.py"
+to = "x_likes_exporter/client.py"
+reason = "Loader reads existing exports; no network client involvement"
+
+[[boundaries]]
+from = "x_likes_exporter/loader.py"
+to = "x_likes_exporter/exporter.py"
+reason = "No upward dependency on the orchestrator"
+
+[[boundaries]]
+from = "x_likes_exporter/loader.py"
+to = "x_likes_exporter/downloader.py"
+reason = "Loader does not fetch media"
+
+# Date helper is a leaf: nothing in the package may flow back into it.
+[[boundaries]]
+from = "x_likes_exporter/dates.py"
+to = "x_likes_exporter/models.py"
+reason = "Dates is below models in the layer order"
