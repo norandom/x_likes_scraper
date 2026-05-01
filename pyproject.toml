@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Export your liked tweets from X (Twitter) to JSON, CSV, Pandas, Markdown, or HTML."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 authors = [
     { name = "Marius Ciepluch" },
 ]
@@ -14,10 +14,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "requests>=2.31.0",

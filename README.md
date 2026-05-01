@@ -13,7 +13,7 @@ Export your liked tweets from X (formerly Twitter) to JSON, CSV, a Pandas DataFr
 
 ## Requirements
 
-Python 3.9 or newer, and [uv](https://docs.astral.sh/uv/) for dependency management. `uv sync` creates `.venv/`, installs the deps listed in `pyproject.toml`, and pins them in `uv.lock`.
+Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/) for dependency management. `uv sync` creates `.venv/`, installs the deps listed in `pyproject.toml`, and pins them in `uv.lock`.
 
 ## Quick start
 
