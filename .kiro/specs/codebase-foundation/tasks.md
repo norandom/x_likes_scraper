@@ -85,7 +85,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
   - _Boundary: parser_
 
-- [ ] 7.3 (P) `test_cookies.py`
+- [x] 7.3 (P) `test_cookies.py`
   - Cases: `CookieManager('tests/fixtures/cookies_valid.json').validate()` returns `True` and `get_csrf_token()` returns the placeholder ct0; `CookieManager('tests/fixtures/cookies_missing_ct0.json').validate()` returns `False`.
   - Observable: `pytest tests/test_cookies.py -v` reports both cases passing.
   - _Requirements: 5.1, 5.2_
