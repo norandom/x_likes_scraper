@@ -64,7 +64,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 1.2, 1.3, 1.4, 11.1, 11.2_
   - _Boundary: tests_
 
-- [ ] 6.2 Record and scrub the test fixtures
+- [x] 6.2 Record and scrub the test fixtures
   - Create `tests/fixtures/` with: `likes_page_success.json` (a full Likes page with one or more tweet entries), `likes_page_empty.json` (a Likes timeline with zero entries), `likes_page_malformed.json` (a response missing the `data.user.result.timeline` chain), `home_page.html` (an `x.com/home` body containing a recognized `main.<hash>.js` link), `main_script.js` (a script body containing one Bearer token literal and one `queryId/operationName` pair for `Likes`), `cookies_valid.json`, `cookies_missing_ct0.json`, `likes_export.json` (a small valid export the loader will consume).
   - Apply the scrubbing rules from `design.md`: replace any `auth_token`, `ct0`, `guest_id`, bearer token, real user id, and third-party `screen_name` with placeholder values (`REDACTED`, `Bearer REDACTED`, the documented test user id, `test_user`).
   - Add `tests/fixtures/README.md` documenting how each fixture was captured and the scrubbing checklist (the `grep -r REDACTED` and `grep -r <known-token-prefix>` checks).
