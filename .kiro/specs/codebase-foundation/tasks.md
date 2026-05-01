@@ -91,7 +91,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 5.1, 5.2_
   - _Boundary: cookies_
 
-- [ ] 7.4 (P) `test_checkpoint.py`
+- [x] 7.4 (P) `test_checkpoint.py`
   - Cases: save a small `Tweet` list with a cursor and user id under `tmp_path`, then construct a fresh `Checkpoint` and assert `load()` returns the same tweets, cursor, and user id; `clear()` removes both files and `exists()` returns `False`; `is_valid('matching_uid')` returns `True` and `is_valid('other_uid')` returns `False`.
   - Observable: `pytest tests/test_checkpoint.py -v` reports all cases passing without writing anywhere outside `tmp_path`.
   - _Requirements: 6.1, 6.2, 6.3_
