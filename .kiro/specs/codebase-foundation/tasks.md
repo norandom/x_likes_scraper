@@ -31,7 +31,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 8.3, 8.4_
   - _Boundary: dates, models, exporter, formatters_
 
-- [ ] 4. Add the public read API
+- [x] 4. Add the public read API
 - [x] 4.1 Implement `loader.py` with `load_export` and `iter_monthly_markdown`
   - Create `x_likes_exporter/loader.py` with `load_export(path: str | Path) -> list[Tweet]` that reads a `likes.json`, reconstructs `Tweet` objects (and nested `User`, `Media`, `quoted_tweet`, `retweeted_tweet`), and returns the list.
   - Add `iter_monthly_markdown(path: str | Path) -> Iterator[Path]` that yields files matching `likes_YYYY-MM.md` under the given directory in reverse-chronological order; non-matching files are skipped.
@@ -41,7 +41,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 7.1, 7.2, 7.4, 7.5_
   - _Boundary: loader_
 
-- [ ] 4.2 Re-export the read API from the package top level
+- [x] 4.2 Re-export the read API from the package top level
   - Update `x_likes_exporter/__init__.py` to import `load_export` and `iter_monthly_markdown` and add them to `__all__`.
   - Observable: `python -c "from x_likes_exporter import load_export, iter_monthly_markdown; print('ok')"` prints `ok` from a fresh interpreter.
   - _Requirements: 7.3, 7.6_
