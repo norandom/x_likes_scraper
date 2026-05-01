@@ -6,6 +6,8 @@ from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+from .dates import parse_x_datetime
+
 
 @dataclass
 class User:
@@ -112,5 +114,7 @@ class Tweet:
 
     def get_created_datetime(self) -> datetime:
         """Parse and return created_at as datetime object"""
-        from dateutil import parser
-        return parser.parse(self.created_at)
+        dt = parse_x_datetime(self.created_at)
+        if dt is None:
+            raise ValueError(f"Could not parse created_at: {self.created_at!r}")
+        return dt

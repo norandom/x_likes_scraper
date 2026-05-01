@@ -10,6 +10,7 @@ from .downloader import MediaDownloader
 from .formatters import JSONFormatter, PandasFormatter, MarkdownFormatter, HTMLFormatter
 from .models import Tweet
 from .checkpoint import Checkpoint
+from .dates import parse_x_datetime
 
 
 class XLikesExporter:
@@ -199,17 +200,15 @@ class XLikesExporter:
         if split_by_month:
             # Group by year/month
             from collections import defaultdict
-            from datetime import datetime
 
             tweets_by_month = defaultdict(list)
             for tweet in self.tweets:
-                try:
-                    # Format: "Sun Nov 09 11:05:17 +0000 2025"
-                    dt = datetime.strptime(tweet.created_at, "%a %b %d %H:%M:%S %z %Y")
+                dt = parse_x_datetime(tweet.created_at)
+                if dt is None:
+                    tweets_by_month["unknown"].append(tweet)
+                else:
                     year_month = dt.strftime("%Y-%m")
                     tweets_by_month[year_month].append(tweet)
-                except (ValueError, TypeError):
-                    tweets_by_month["unknown"].append(tweet)
 
             # Create output directory
             output_dir = self.output_dir / "by_month"

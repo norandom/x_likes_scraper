@@ -21,8 +21,8 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
   - _Boundary: parser, client_
 
-- [ ] 3. Replace the four duplicated date-parse blocks
-- [ ] 3.1 Route `models.py`, `exporter.py`, and `formatters.py` through `parse_x_datetime`
+- [x] 3. Replace the four duplicated date-parse blocks
+- [x] 3.1 Route `models.py`, `exporter.py`, and `formatters.py` through `parse_x_datetime`
   - In `models.py:Tweet.get_created_datetime`, replace the `dateutil.parser.parse` call with `parse_x_datetime(self.created_at)`. Translate a `None` return into a raise so the existing public contract of this method is preserved.
   - In `exporter.py:export_markdown`, replace the inline `datetime.strptime(tweet.created_at, "%a %b %d ...")` block in the per-month grouping with `parse_x_datetime(tweet.created_at)`; route `None` to the `unknown` group.
   - In `formatters.py:MarkdownFormatter.export`, replace the per-month grouping that calls `tweet.get_created_datetime()` with `parse_x_datetime(tweet.created_at)`; route `None` to the `unknown` group.

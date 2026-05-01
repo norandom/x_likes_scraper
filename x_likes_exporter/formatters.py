@@ -9,6 +9,7 @@ from typing import List
 from datetime import datetime
 from .models import Tweet
 from .downloader import MediaDownloader
+from .dates import parse_x_datetime
 
 
 class JSONFormatter:
@@ -141,16 +142,14 @@ class MarkdownFormatter:
         # Group tweets by month
         tweets_by_month = {}
         for tweet in tweets:
-            try:
-                created = tweet.get_created_datetime()
+            created = parse_x_datetime(tweet.created_at)
+            if created is None:
+                month_key = 'unknown'
+            else:
                 month_key = created.strftime('%Y-%m')
-                if month_key not in tweets_by_month:
-                    tweets_by_month[month_key] = []
-                tweets_by_month[month_key].append(tweet)
-            except (ValueError, TypeError):
-                if 'unknown' not in tweets_by_month:
-                    tweets_by_month['unknown'] = []
-                tweets_by_month['unknown'].append(tweet)
+            if month_key not in tweets_by_month:
+                tweets_by_month[month_key] = []
+            tweets_by_month[month_key].append(tweet)
 
         # Sort months in reverse chronological order
         sorted_months = sorted(tweets_by_month.keys(), reverse=True)
@@ -181,11 +180,11 @@ class MarkdownFormatter:
         lines.append(f"\n### [@{tweet.user.screen_name}](https://x.com/{tweet.user.screen_name})")
         lines.append(f"**{tweet.user.name}** {'✓' if tweet.user.verified else ''}")
 
-        try:
-            created = tweet.get_created_datetime()
-            date_str = created.strftime('%Y-%m-%d %H:%M:%S')
-        except (ValueError, TypeError):
+        created = parse_x_datetime(tweet.created_at)
+        if created is None:
             date_str = tweet.created_at
+        else:
+            date_str = created.strftime('%Y-%m-%d %H:%M:%S')
 
         lines.append(f"*{date_str}*")
 
