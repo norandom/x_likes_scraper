@@ -126,8 +126,8 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
   - _Boundary: client_
 
-- [ ] 9. Cover the exporter resume path
-- [ ] 9.1 `test_exporter_resume.py`
+- [x] 9. Cover the exporter resume path
+- [x] 9.1 `test_exporter_resume.py`
   - Cases: pre-populate a checkpoint under `tmp_path` for `user_id="A"`; instantiate `XLikesExporter` with cookies pointing at `tests/fixtures/cookies_valid.json`, an `output_dir=tmp_path`, and `XAPIClient.fetch_all_likes` stubbed to return a list of new tweets including one whose id matches a tweet already in the checkpoint; call `fetch_likes(user_id="A", resume=True, download_media=False)` and assert the returned list has no duplicate ids and that the original cursor was passed into the stubbed `fetch_all_likes`. Repeat with `user_id="B"` (different from the checkpoint's `"A"`) and assert the checkpoint was cleared and the fetch started fresh.
   - Observable: `pytest tests/test_exporter_resume.py -v` reports both cases passing; the duplicate-id assertion is explicit.
   - _Requirements: 6.4, 6.5_
