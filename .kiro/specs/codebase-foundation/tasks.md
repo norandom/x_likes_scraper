@@ -12,8 +12,8 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 8.1, 8.2_
   - _Boundary: dates_
 
-- [ ] 2. Add the pure parser module
-- [ ] 2.1 Lift parsing functions out of `client.py` into `parser.py`
+- [x] 2. Add the pure parser module
+- [x] 2.1 Lift parsing functions out of `client.py` into `parser.py`
   - Create `x_likes_exporter/parser.py` with module-level functions `extract_tweets`, `parse_tweet`, `extract_cursor`, and `parse_response` whose bodies are the existing `_extract_tweets`, `_parse_tweet`, `_extract_cursor` logic with `self` removed.
   - Functions never raise on missing keys: a malformed response yields `[]` from `extract_tweets` and `None` from `extract_cursor`; a per-entry failure is skipped.
   - Replace the bodies of `XAPIClient._extract_tweets`, `_parse_tweet`, `_extract_cursor` with two-line passthroughs that delegate to `parser`.
