@@ -103,7 +103,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
   - _Boundary: loader_
 
-- [ ] 7.6 (P) `test_formatters.py`
+- [x] 7.6 (P) `test_formatters.py`
   - Build a small hand-written `Tweet` list of three tweets covering: a plain tweet with one media item, a retweet, and a tweet whose `created_at` is an unparseable string. Run each formatter against the list under `tmp_path`.
   - JSON: re-load the written file and assert it equals `[t.to_dict() for t in tweets]`.
   - Markdown: assert the output contains a section header with `unknown` for the unparseable-date tweet, sections for the parseable months in reverse chronological order, and one tweet block per tweet with handle, name, date, text, and stats present.
