@@ -97,7 +97,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 6.1, 6.2, 6.3_
   - _Boundary: checkpoint_
 
-- [ ] 7.5 (P) `test_loader.py`
+- [x] 7.5 (P) `test_loader.py`
   - Cases: `load_export('tests/fixtures/likes_export.json')` returns a `list[Tweet]` whose elements' `to_dict()` equals the source JSON entries; `load_export('does/not/exist.json')` raises `FileNotFoundError` with the path in the message; `load_export(<path to a JSON that is a string, not a list>)` raises `ValueError`; `iter_monthly_markdown(tmp_path)` over a directory containing `likes_2024-03.md`, `likes_2024-01.md`, `likes_2025-02.md`, and `notes.md` yields paths in the order `2025-02, 2024-03, 2024-01` and skips `notes.md`; `iter_monthly_markdown('does/not/exist')` raises `FileNotFoundError`; `from x_likes_exporter import load_export, iter_monthly_markdown` succeeds.
   - Observable: `pytest tests/test_loader.py -v` reports all cases passing.
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
