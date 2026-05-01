@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wrapper around cli.py that reads config from .env.
+# Wrapper around cli.py that reads config from .env and runs via uv.
 # Usage:
 #   ./scrape.sh                # full export, resuming from a checkpoint if one exists
 #   ./scrape.sh --no-media     # skip media download (fast)
@@ -9,6 +9,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "Error: uv is not installed. See https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
 
 if [ ! -f .env ]; then
     echo "Error: .env not found." >&2
@@ -31,10 +36,5 @@ if [ ! -f "$COOKIES_FILE" ]; then
     exit 1
 fi
 
-if [ -d venv ]; then
-    # shellcheck disable=SC1091
-    source venv/bin/activate
-fi
-
 echo "Exporting likes for @${X_USERNAME:-?} (user ID ${X_USER_ID}) to ${OUTPUT_DIR}/"
-exec python cli.py "$COOKIES_FILE" "$X_USER_ID" --output "$OUTPUT_DIR" --resume "$@"
+exec uv run python cli.py "$COOKIES_FILE" "$X_USER_ID" --output "$OUTPUT_DIR" --resume "$@"

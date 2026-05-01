@@ -6,8 +6,10 @@ The short path from "I have an X account" to "I have my likes on disk."
 
 ```bash
 cd x_likes_exporter_py
-pip install -r requirements.txt
+uv sync
 ```
+
+If you don't have uv yet, see https://docs.astral.sh/uv/.
 
 ## Step 2: Export your cookies
 
@@ -38,83 +40,38 @@ From your profile page: open https://x.com/YOUR_USERNAME, hit F12, search the HT
 
 Or use https://tweeterid.com/ and paste in your @handle.
 
-## Step 4: Run it
-
-### From the command line
+## Step 4: Configure and run
 
 ```bash
-# Export everything (JSON, CSV, Markdown, HTML)
-python cli.py cookies.json YOUR_USER_ID
-
-# See all options
-python cli.py --help
+cp .env.sample .env && $EDITOR .env   # set X_USER_ID (and X_USERNAME for reference)
+./scrape.sh
 ```
 
-### From Python
-
-Create `export_my_likes.py`:
-
-```python
-from x_likes_exporter import XLikesExporter
-
-# Your User ID (the number, not @username)
-USER_ID = "123456789"  # Replace with your actual User ID
-
-# Initialize exporter
-exporter = XLikesExporter(
-    cookies_file="cookies.json",
-    output_dir="my_likes_export"
-)
-
-# Fetch all likes (this may take a while)
-print("Fetching your likes...")
-tweets = exporter.fetch_likes(
-    user_id=USER_ID,
-    download_media=True  # Set to False to skip images
-)
-
-print(f"✓ Found {len(tweets)} liked tweets!")
-
-# Export to all formats
-print("Exporting...")
-exporter.export_all()
-
-print("✓ Done! Check the 'my_likes_export' folder")
-```
-
-Run it:
-```bash
-python export_my_likes.py
-```
+`scrape.sh` runs `cli.py` through `uv run` and resumes from a checkpoint if one is present.
 
 ## What you end up with
 
 ```
-my_likes_export/
-├── likes.json          # Complete data in JSON
-├── likes.csv           # Spreadsheet-friendly format
-├── likes.md            # Readable Markdown with images
-├── likes.html          # Web page to view in browser
-└── media/              # Downloaded images/videos
+output/
+├── likes.json
+├── likes.csv
+├── likes.html
+├── by_month/             # per-month Markdown with embedded local images
+│   ├── likes_2025-04.md
+│   ├── likes_2025-03.md
+│   └── ...
+└── media/                # downloaded images and videos
     ├── 123456_0.jpg
-    ├── 123456_1.jpg
     └── ...
 ```
 
 ## Common commands
 
 ```bash
-# Export only JSON and Markdown
-python cli.py cookies.json YOUR_USER_ID --format json --format markdown
-
-# Skip media download (faster)
-python cli.py cookies.json YOUR_USER_ID --no-media
-
-# Custom output folder
-python cli.py cookies.json YOUR_USER_ID --output my_folder
-
-# Show statistics
-python cli.py cookies.json YOUR_USER_ID --stats
+./scrape.sh --no-media          # skip media download
+./scrape.sh --stats             # print stats at the end
+./scrape.sh --format markdown   # only the per-month Markdown
+./scrape.sh --output my_export  # custom output directory
 ```
 
 ## Analyze with pandas
@@ -123,12 +80,9 @@ python cli.py cookies.json YOUR_USER_ID --stats
 from x_likes_exporter import XLikesExporter
 
 exporter = XLikesExporter("cookies.json")
-tweets = exporter.fetch_likes("YOUR_USER_ID", download_media=False)
+exporter.fetch_likes("YOUR_USER_ID", download_media=False)
 
-# Get as DataFrame
 df = exporter.get_dataframe()
-
-# Top 10 most liked tweets
 print(df.nlargest(10, 'favorite_count')[['user_screen_name', 'text', 'favorite_count']])
 
 # Save analysis

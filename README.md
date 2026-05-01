@@ -13,27 +13,18 @@ Export your liked tweets from X (formerly Twitter) to JSON, CSV, a Pandas DataFr
 
 ## Requirements
 
-Python 3.8+, plus `requests`, `pandas`, `beautifulsoup4`, `Pillow`, `tqdm`, `python-dateutil` (all in `requirements.txt`). Install with `pip install -r requirements.txt`, or `pip install -e .` to install as a package.
+Python 3.9 or newer, and [uv](https://docs.astral.sh/uv/) for dependency management. `uv sync` creates `.venv/`, installs the deps listed in `pyproject.toml`, and pins them in `uv.lock`.
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Drop your exported cookies in the project root
-#    (see "Exporting cookies" below for how)
-cp /path/to/cookies.json .
-
-# 3. Configure your account
-cp .env.sample .env
-$EDITOR .env       # fill in X_USER_ID (and X_USERNAME for your own reference)
-
-# 4. Run it
+uv sync                          # install dependencies
+cp /path/to/cookies.json .       # see "Exporting cookies" below
+cp .env.sample .env && $EDITOR .env
 ./scrape.sh
 ```
 
-That's it. `scrape.sh` reads `.env`, activates `venv/` if present, and runs the exporter with `--resume` so an interrupted run picks up where it left off. Anything you pass after `./scrape.sh` is forwarded to `cli.py`:
+`scrape.sh` loads `.env`, calls `cli.py` through `uv run`, and passes `--resume` so an interrupted run resumes from its checkpoint. Extra flags are forwarded:
 
 ```bash
 ./scrape.sh --no-media         # skip media download
@@ -88,13 +79,13 @@ curl "https://tweeterid.com/ajax.php?username=YOUR_USERNAME"
 
 ### Calling the CLI directly
 
-`scrape.sh` is just a wrapper. If you'd rather invoke `cli.py` yourself:
+`scrape.sh` is a thin wrapper. To invoke `cli.py` yourself, prefix with `uv run` (or `source .venv/bin/activate` first):
 
 ```bash
-python cli.py cookies.json YOUR_USER_ID --resume
-python cli.py cookies.json YOUR_USER_ID --no-media
-python cli.py cookies.json YOUR_USER_ID --format json --format markdown
-python cli.py cookies.json YOUR_USER_ID --format markdown --single-file
+uv run python cli.py cookies.json YOUR_USER_ID --resume
+uv run python cli.py cookies.json YOUR_USER_ID --no-media
+uv run python cli.py cookies.json YOUR_USER_ID --format json --format markdown
+uv run python cli.py cookies.json YOUR_USER_ID --format markdown --single-file
 ```
 
 ### From Python
@@ -402,13 +393,15 @@ x_likes_exporter_py/
 │   ├── models.py         # Data models
 │   ├── downloader.py     # Media downloader
 │   ├── formatters.py     # Export formatters
+│   ├── checkpoint.py     # Resume checkpoints
 │   └── exporter.py       # Main exporter class
 ├── cli.py                # Command-line interface
-├── examples/
-│   └── example_usage.py  # Usage examples
-├── requirements.txt      # Dependencies
-├── setup.py             # Package setup
-└── README.md            # This file
+├── scrape.sh             # .env-driven entry point
+├── .env.sample           # Config template
+├── examples/             # Usage examples
+├── pyproject.toml        # Project + dependencies
+├── uv.lock               # Pinned dependency versions
+└── README.md
 ```
 
 ## API reference
