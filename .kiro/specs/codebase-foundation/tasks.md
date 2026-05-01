@@ -73,7 +73,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Boundary: tests/fixtures_
 
 - [ ] 7. Write unit tests for the leaf modules
-- [ ] 7.1 (P) `test_dates.py`
+- [x] 7.1 (P) `test_dates.py`
   - Cases: a known-good X-format string parses to a timezone-aware `datetime` matching the expected components; an empty string returns `None`; a string in an unrelated format (e.g. ISO 8601) returns `None`; a non-string input returns `None` rather than raising.
   - Observable: `pytest tests/test_dates.py -v` reports all cases passing.
   - _Requirements: 8.1, 8.2_
