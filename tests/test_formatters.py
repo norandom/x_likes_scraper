@@ -308,3 +308,48 @@ def test_pandas_formatter_dataframe(sample_tweets) -> None:
 
     # All three screen_names made it into the DataFrame.
     assert set(df["user_screen_name"]) == {"alice", "bob", "carol"}
+
+
+def test_markdown_formatter_global_header_default_present(
+    sample_tweets: List[Tweet], tmp_path
+) -> None:
+    """Default args still emit the file-level h1 + export metadata block.
+
+    Backward-compat check for task 1.1's new ``omit_global_header`` keyword
+    parameter: existing callers see byte-identical output, so the per-file
+    boilerplate (file-level h1, ``**Exported:**``, ``**Total Tweets:**``)
+    must still appear when ``MarkdownFormatter().export(...)`` is called
+    without the new flag.
+    """
+    output = tmp_path / "default.md"
+    MarkdownFormatter().export(sample_tweets, str(output))
+    body = output.read_text(encoding="utf-8")
+
+    assert "# X (Twitter) Liked Tweets" in body
+    assert "**Exported:**" in body
+    assert "**Total Tweets:**" in body
+
+
+def test_markdown_formatter_omit_global_header(
+    sample_tweets: List[Tweet], tmp_path
+) -> None:
+    """``omit_global_header=True`` strips boilerplate; per-month + per-tweet content stays.
+
+    The MCP indexer (mcp-pageindex spec) drives this branch: per-month
+    files start directly at ``## YYYY-MM`` so PageIndex's tree root is the
+    month, not 131 copies of ``# X (Twitter) Liked Tweets``.
+    """
+    output = tmp_path / "omit.md"
+    MarkdownFormatter().export(sample_tweets, str(output), omit_global_header=True)
+    body = output.read_text(encoding="utf-8")
+
+    # Boilerplate is gone.
+    assert "# X (Twitter) Liked Tweets" not in body
+    assert "**Exported:**" not in body
+    assert "**Total Tweets:**" not in body
+
+    # Month sections, per-tweet block, and stats line all still present.
+    assert "## 2025-03" in body
+    assert "## 2025-01" in body
+    assert "@alice" in body  # plain-with-media tweet's handle
+    assert "❤️" in body  # stats line still rendered

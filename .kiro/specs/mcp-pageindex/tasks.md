@@ -11,7 +11,7 @@
   - _Requirements: 3.1_
   - _Boundary: x_likes_exporter/formatters.py, x_likes_exporter/exporter.py_
 
-- [ ] 1.2 Update `tests/test_formatters.py` to cover both shapes of the new parameter
+- [x] 1.2 Update `tests/test_formatters.py` to cover both shapes of the new parameter
   - Add a test that asserts `# X (Twitter) Liked Tweets`, `**Exported:**`, and `**Total Tweets:**` are present when `MarkdownFormatter().export(...)` is called with default arguments
   - Add a test that asserts those three strings are absent when called with `omit_global_header=True`, while `## 2025-03`, `## 2025-01`, the per-tweet `[@alice]` block, and the stats line all remain present in the output
   - Existing `test_markdown_formatter_basic` and `test_markdown_formatter_unknown_routing` continue to assert default-argument behavior and continue to pass without modification
