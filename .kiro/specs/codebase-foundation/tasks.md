@@ -72,7 +72,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 1.5, 2.1, 2.2, 2.3, 2.4_
   - _Boundary: tests/fixtures_
 
-- [ ] 7. Write unit tests for the leaf modules
+- [x] 7. Write unit tests for the leaf modules
 - [x] 7.1 (P) `test_dates.py`
   - Cases: a known-good X-format string parses to a timezone-aware `datetime` matching the expected components; an empty string returns `None`; a string in an unrelated format (e.g. ISO 8601) returns `None`; a non-string input returns `None` rather than raising.
   - Observable: `pytest tests/test_dates.py -v` reports all cases passing.
@@ -114,7 +114,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Boundary: formatters_
 
 - [ ] 8. Write the network-mocked tests for the auth and client layers
-- [ ] 8.1 `test_auth.py`
+- [x] 8.1 `test_auth.py`
   - Cases (each uses `@responses.activate`): register `https://x.com/home` returning `home_page.html` and the script URL it references returning `main_script.js`; assert `XAuthenticator.get_bearer_token()` returns the placeholder bearer literal in the script; register a home page with no `<link>` matching the pattern and assert the call raises with a clear message; register a main script with no bearer literal and assert the call raises with a clear message; call `get_bearer_token()` twice and assert exactly one network round-trip occurred (cache reuse); call `get_query_id('Likes')` twice and assert the same.
   - Observable: `pytest tests/test_auth.py -v` reports all cases passing; the cache-reuse case asserts `len(responses.calls) == 2` (one home, one script) after the second `get_bearer_token` invocation.
   - _Requirements: 5.3, 5.4, 5.5, 5.6_
