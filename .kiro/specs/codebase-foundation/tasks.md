@@ -79,7 +79,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Requirements: 8.1, 8.2_
   - _Boundary: dates_
 
-- [ ] 7.2 (P) `test_parser.py`
+- [x] 7.2 (P) `test_parser.py`
   - Cases: `extract_tweets(load_fixture('likes_page_success.json'))` returns the expected number of `Tweet` objects with expected ids and `screen_name`; `extract_tweets(load_fixture('likes_page_empty.json'))` returns `[]`; `extract_tweets(load_fixture('likes_page_malformed.json'))` returns `[]` and does not raise; `extract_cursor` returns the bottom cursor when present and `None` when absent; hand-built dicts exercise the per-entry edge cases (missing `legacy`, missing `core`, non-numeric `views.count`, retweet variant with `retweeted_status_result`, quote variant with `quoted_status_result`).
   - Observable: `pytest tests/test_parser.py -v` reports all cases passing; one case explicitly asserts `view_count == 0` for a tweet whose fixture has `views.count = "abc"`.
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
