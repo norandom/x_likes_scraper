@@ -16,19 +16,20 @@ A vector store would work, but it's a lot of moving parts for one user reading t
 
 - A stdio MCP server that registers with Claude Code (or any MCP client) and exposes the like history as searchable content.
 - Tools:
-  - `search_likes(query)` returns matching tweets with month, handle, ID, and a snippet.
+  - `search_likes(query, year=None, month_start=None, month_end=None)` returns matching tweets with month, handle, ID, and a snippet. The optional structured filter pre-filters which markdown files PageIndex sees, so a 3-month query is roughly an order of magnitude faster than a 26k-tweet open-ended one and doesn't depend on the LLM honoring a date in prose.
   - `list_months()` returns available months.
   - `get_month(year_month)` returns the raw Markdown for one month.
   - `read_tweet(tweet_id)` returns one tweet's full text and metadata.
-- The server uses PageIndex pointed at a local LLM endpoint configured in `.env`. No calls to hosted services by default.
+- The server uses PageIndex pointed at the user's local Anthropic-compatible LLM endpoint configured in `.env`. No calls to hosted services by default.
 
 ## Approach
 
 - A new top-level entry point: `python -m x_likes_mcp` (or a script wired into `pyproject.toml` as a console entry point).
 - Use the official Python MCP SDK (`mcp` package) for stdio server scaffolding.
 - On startup, the server scans `output/by_month/`, hands the files to PageIndex, and caches the resulting tree on disk so subsequent starts are instant. Cache is invalidated by mtime: if any `.md` file is newer than the cache, rebuild.
-- PageIndex's reasoning step is pointed at a local OpenAI-compatible endpoint configured via two new `.env` variables: `LLM_API_BASE` and `LLM_API_KEY`. The user provides those.
+- PageIndex's reasoning step routes through LiteLLM, which is what PageIndex uses internally. Three new `.env` variables drive the LLM call: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_OPUS_MODEL`. PageIndex is invoked with `model="anthropic/{ANTHROPIC_DEFAULT_OPUS_MODEL}"` so LiteLLM picks up the base URL and key from env.
 - The four MCP tools are thin wrappers over PageIndex queries and the read API from Spec 1.
+- Before the index can be built sensibly, the per-month markdown's per-file `# X (Twitter) Liked Tweets` boilerplate (h1 plus export-timestamp metadata) needs to come out of `MarkdownFormatter.export` for `split_by_month=True`. With it gone, the `## YYYY-MM` heading is the effective top of each file's tree and PageIndex doesn't see 131 copies of the same h1.
 
 ## Scope
 
@@ -59,7 +60,8 @@ A vector store would work, but it's a lot of moving parts for one user reading t
 
 ## Constraints
 
-- Local LLM endpoint, OpenAI-compatible. The user plugs in the URL and key via `.env`.
-- PageIndex's reasoning quality is bound by whatever local model is in front of it. The spec doesn't promise quality past "the model can follow PageIndex's prompts."
-- No new dependencies past `mcp` (Python SDK) and `pageindex`.
+- Local Anthropic-compatible LLM endpoint. The user plugs in `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_DEFAULT_OPUS_MODEL` via `.env`. PageIndex routes through LiteLLM, which honors those env vars when the model string is `anthropic/<model>`.
+- PageIndex's reasoning quality is bound by whatever model is in front of it. The spec doesn't promise quality past "the model can follow PageIndex's prompts."
+- No new dependencies past `mcp` (Python SDK) and `pageindex` (which transitively brings in `litellm`).
 - Tests for this spec mock the LLM call and the PageIndex tree builder where possible. End-to-end "real model" verification is documented as a manual step, not gated in CI.
+- One small change to Spec 1's `MarkdownFormatter.export` (drop the per-file h1 boilerplate when `split_by_month=True`) is in scope for this spec because the indexing depends on it. It does not require re-opening codebase-foundation; the spec ships its own commit.
