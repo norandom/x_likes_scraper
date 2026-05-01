@@ -32,7 +32,7 @@ The ordering follows the Refactor Sequencing section of the design. Steps 1-4 ar
   - _Boundary: dates, models, exporter, formatters_
 
 - [ ] 4. Add the public read API
-- [ ] 4.1 Implement `loader.py` with `load_export` and `iter_monthly_markdown`
+- [x] 4.1 Implement `loader.py` with `load_export` and `iter_monthly_markdown`
   - Create `x_likes_exporter/loader.py` with `load_export(path: str | Path) -> list[Tweet]` that reads a `likes.json`, reconstructs `Tweet` objects (and nested `User`, `Media`, `quoted_tweet`, `retweeted_tweet`), and returns the list.
   - Add `iter_monthly_markdown(path: str | Path) -> Iterator[Path]` that yields files matching `likes_YYYY-MM.md` under the given directory in reverse-chronological order; non-matching files are skipped.
   - Raise `FileNotFoundError` (with the missing path in the message) when the input path does not exist; raise `ValueError` (with the failing field in the message) when the JSON does not match the expected shape.
