@@ -121,7 +121,14 @@ class MarkdownFormatter:
         """
         self.media_downloader = media_downloader
 
-    def export(self, tweets: List[Tweet], output_file: str, include_media: bool = True):
+    def export(
+        self,
+        tweets: List[Tweet],
+        output_file: str,
+        include_media: bool = True,
+        *,
+        omit_global_header: bool = False,
+    ):
         """
         Export tweets to Markdown file
 
@@ -129,15 +136,22 @@ class MarkdownFormatter:
             tweets: List of Tweet objects
             output_file: Output Markdown file path
             include_media: Include embedded media images
+            omit_global_header: When True, skip the file-level h1, the
+                ``**Exported:**`` timestamp, the ``**Total Tweets:**`` line,
+                and the trailing ``---`` divider. The per-month sections and
+                per-tweet blocks are unchanged. Used by the per-month split
+                branch so PageIndex sees ``## YYYY-MM`` as the effective top
+                of each per-month tree.
         """
         output_path = Path(output_file)
         md_lines = []
 
         # Header
-        md_lines.append("# X (Twitter) Liked Tweets\n")
-        md_lines.append(f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        md_lines.append(f"**Total Tweets:** {len(tweets)}\n")
-        md_lines.append("---\n")
+        if not omit_global_header:
+            md_lines.append("# X (Twitter) Liked Tweets\n")
+            md_lines.append(f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            md_lines.append(f"**Total Tweets:** {len(tweets)}\n")
+            md_lines.append("---\n")
 
         # Group tweets by month
         tweets_by_month = {}

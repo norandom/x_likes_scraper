@@ -2,7 +2,7 @@
 
 ## 1. Foundation: dependencies, env sample, and the formatter prerequisite
 
-- [ ] 1.1 Add the `omit_global_header` parameter to `MarkdownFormatter.export` and route the per-month branch through it
+- [x] 1.1 Add the `omit_global_header` parameter to `MarkdownFormatter.export` and route the per-month branch through it
   - In `x_likes_exporter/formatters.py`, add `omit_global_header: bool = False` as a keyword parameter to `MarkdownFormatter.export`
   - Wrap the four `md_lines.append(...)` calls that emit the global h1, the `**Exported:**` timestamp, the `**Total Tweets:**` line, and the trailing `---` inside `if not omit_global_header:`
   - In `x_likes_exporter/exporter.py`, the per-month branch of `XLikesExporter.export_markdown` (the `for year_month in sorted(...)` loop, the `formatter.export(...)` call inside it) passes `omit_global_header=True`

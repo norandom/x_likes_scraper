@@ -219,7 +219,12 @@ class XLikesExporter:
             for year_month in sorted(tweets_by_month.keys(), reverse=True):
                 tweets = tweets_by_month[year_month]
                 month_file = output_dir / f"likes_{year_month}.md"
-                formatter.export(tweets, str(month_file), include_media=include_media)
+                formatter.export(
+                    tweets,
+                    str(month_file),
+                    include_media=include_media,
+                    omit_global_header=True,
+                )
                 count += 1
 
             print(f"Exported {len(self.tweets)} tweets to {count} monthly files in {output_dir}/")
