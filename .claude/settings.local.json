@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Skill(humanizer)",
-      "mcp__plugin_sentrux_sentrux__health"
+      "mcp__plugin_sentrux_sentrux__health",
+      "Bash(uv run *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'test\\(codebase-foundation\\): add test_client.py *)",
+      "Bash(git commit -m 'test\\(codebase-foundation\\): add test_exporter_resume.py *)",
+      "mcp__plugin_sentrux_sentrux__rescan",
+      "mcp__plugin_sentrux_sentrux__scan"
     ]
   }
 }
