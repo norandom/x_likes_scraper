@@ -91,7 +91,7 @@
 
 ## 3. Tree, walker, ranker, index
 
-- [ ] 3.1 Implement `TweetIndex` data containers and the build-or-load skeleton
+- [x] 3.1 Implement `TweetIndex` data containers and the build-or-load skeleton
   - Define `MonthInfo` frozen dataclass with `year_month`, `path`, `tweet_count` fields
   - Define `IndexError(Exception)`
   - Implement `TweetIndex.__init__` accepting the `TweetTree`, the `tweets_by_id: dict[str, Tweet]`, the `paths_by_month: dict[str, Path]`, the `author_affinity: dict[str, float]`, the `Config`, and the `RankerWeights`; mark instance attributes as read-only by convention
@@ -122,7 +122,7 @@
   - _Depends: 1.6_
   - _Boundary: x_likes_mcp/tree.py_
 
-- [ ] 3.3a Implement `_resolve_filter` on `TweetIndex`
+- [x] 3.3a Implement `_resolve_filter` on `TweetIndex`
   - Implement `_resolve_filter(year, month_start, month_end) -> list[str] | None` enforcing:
     - `month_start` set requires `year` set (else `ValueError("filter: month_start requires year")`)
     - `month_end` set requires `month_start` set (else `ValueError("filter: month_end requires month_start")`)
