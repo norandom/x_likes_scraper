@@ -335,6 +335,88 @@ def test_resolve_filter_bad_month_format_raises(fake_export: Config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _candidate_ids: structured filter → in-scope tweet-id set
+
+
+def test_candidate_ids_unset_filter_returns_none(fake_export: Config) -> None:
+    """All three filter fields ``None`` → ``None`` (no restriction)."""
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    assert idx._candidate_ids(None, None, None) is None
+
+
+def test_candidate_ids_year_only_returns_year_ids(
+    fake_export: Config,
+) -> None:
+    """``year`` only → ids whose ``created_at`` lands inside that year.
+
+    The fixture export is entirely in 2025; mutate one in-memory tweet's
+    ``created_at`` to 2026 so the filter has something to discriminate.
+    """
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    # Move tweet "2001" into 2026 so we can split the corpus by year.
+    idx.tweets_by_id["2001"].created_at = "Wed Feb 11 14:05:30 +0000 2026"
+
+    ids_2026 = idx._candidate_ids(2026, None, None)
+    assert ids_2026 == {"2001"}
+
+    ids_2025 = idx._candidate_ids(2025, None, None)
+    assert ids_2025 == {"1001", "1002", "3001"}
+
+
+def test_candidate_ids_month_range_returns_in_scope(
+    fake_export: Config,
+) -> None:
+    """``year`` + ``month_start``/``month_end`` → inclusive month range."""
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    # Spread fixture ids across 2026 Jan/Feb/Mar/Apr/May.
+    idx.tweets_by_id["1001"].created_at = "Wed Jan 14 09:30:00 +0000 2026"
+    idx.tweets_by_id["1002"].created_at = "Wed Feb 18 14:05:30 +0000 2026"
+    idx.tweets_by_id["2001"].created_at = "Wed Mar 11 14:05:30 +0000 2026"
+    idx.tweets_by_id["3001"].created_at = "Wed May 06 10:00:00 +0000 2026"
+
+    ids = idx._candidate_ids(2026, "02", "04")
+    # Only Feb (1002) and Mar (2001) — Jan (1001) and May (3001) excluded.
+    assert ids == {"1002", "2001"}
+
+
+def test_candidate_ids_excludes_unparseable_when_filtered(
+    fake_export: Config,
+) -> None:
+    """A tweet with malformed ``created_at`` is excluded from filtered queries."""
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    # Pull "1001" into 2026 so the filter has matches; corrupt "1002".
+    idx.tweets_by_id["1001"].created_at = "Wed Jan 14 09:30:00 +0000 2026"
+    idx.tweets_by_id["1002"].created_at = "not a real datetime"
+
+    ids = idx._candidate_ids(2026, None, None)
+    assert "1002" not in ids
+    assert "1001" in ids
+
+
+def test_candidate_ids_includes_unparseable_when_unfiltered(
+    fake_export: Config,
+) -> None:
+    """``_candidate_ids(None, None, None)`` returns ``None`` even with malformed
+    rows; downstream retrievers interpret ``None`` as no restriction, so the
+    malformed-``created_at`` tweet is reachable.
+    """
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    idx.tweets_by_id["1002"].created_at = "not a real datetime"
+
+    # Unset filter → None (= unrestricted, every tweet eligible).
+    assert idx._candidate_ids(None, None, None) is None
+
+    # The malformed tweet is still in the corpus and would be a candidate
+    # under the "no restriction" interpretation that retrievers apply.
+    assert "1002" in set(idx.tweets_by_id.keys())
+
+
+# ---------------------------------------------------------------------------
 # lookup_tweet / list_months / get_month_markdown
 
 

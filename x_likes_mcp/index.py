@@ -313,6 +313,45 @@ class TweetIndex:
 
         return [f"{year}-{m:02d}" for m in range(ms, me + 1)]
 
+    def _candidate_ids(
+        self,
+        year: int | None,
+        month_start: str | None,
+        month_end: str | None,
+    ) -> set[str] | None:
+        """Resolve the structured filter to an in-scope tweet-id set.
+
+        Returns ``None`` when the filter is fully unset (all three params
+        ``None``). The cosine and BM25 retrievers interpret ``None`` as
+        "no restriction" — every tweet is a candidate, including those
+        with unparseable ``created_at``.
+
+        When the filter is partially or fully set, this resolves the
+        in-scope ``YYYY-MM`` strings via :meth:`_resolve_filter` and
+        walks ``self.tweets_by_id``, selecting ids whose ``created_at``
+        parses to a month inside that scope. Tweets whose ``created_at``
+        is unparseable are excluded from filtered queries (they have no
+        month to match against), per requirement 4.4 / 5.4.
+
+        Raises:
+            ValueError: when the filter combination is invalid (delegated
+                from :meth:`_resolve_filter`).
+        """
+        if year is None and month_start is None and month_end is None:
+            return None
+
+        in_scope_months = set(self._resolve_filter(year, month_start, month_end) or [])
+        candidate_ids: set[str] = set()
+        for tweet_id, tweet in self.tweets_by_id.items():
+            try:
+                dt = tweet.get_created_datetime()
+            except (ValueError, TypeError):
+                # Unparseable created_at: excluded from filtered queries.
+                continue
+            if dt.strftime("%Y-%m") in in_scope_months:
+                candidate_ids.add(tweet_id)
+        return candidate_ids
+
     def search(
         self,
         query: str,

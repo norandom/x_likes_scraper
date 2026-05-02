@@ -88,7 +88,7 @@
   - _Boundary: x_likes_mcp/index.py_
   - _Depends: 2.4, 2.5_
 
-- [ ] 3.2 Resolve candidate id sets from the structured filter
+- [x] 3.2 Resolve candidate id sets from the structured filter
   - Add `TweetIndex._candidate_ids(year, month_start, month_end) -> set[str] | None`.
   - When the filter is fully unset, return `None` (whole corpus). Otherwise call the existing `_resolve_filter` to get the in-scope `YYYY-MM` list, then walk `self.tweets_by_id` and select ids whose `Tweet.get_created_datetime().strftime('%Y-%m')` is in that set. Tweets with unparseable `created_at` are excluded only when a filter is active.
   - Observable completion: unit tests assert that an unfiltered call returns `None`, a year-only filter returns ids only for that year, and tweets with unparseable `created_at` are excluded from filtered results but included in unfiltered ones.
