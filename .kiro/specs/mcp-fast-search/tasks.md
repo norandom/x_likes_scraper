@@ -140,14 +140,14 @@
   - _Boundary: x_likes_mcp/server.py, tests/mcp/test_server_integration.py_
 
 - [ ] 5. Test layer
-- [ ] 5.1 (P) Add embedder mock guard to `tests/mcp/conftest.py`
+- [x] 5.1 (P) Add embedder mock guard to `tests/mcp/conftest.py`
   - Add an autouse fixture that patches `x_likes_mcp.embeddings.Embedder._call_embeddings_api` to a deterministic vectorizer (e.g. hashed-bag-of-words producing a stable `list[list[float]]` of dimension `D`). Tests that need a different vectorizer override the fixture.
   - Choose a small fixed dimension (e.g. `D=16`) and document it as a test-only constant in conftest.
   - Observable completion: `pytest tests/mcp/` runs to completion on a clean checkout with no `OPENROUTER_API_KEY` set and no network access; no real HTTP request is observed.
   - _Requirements: 10.1, 10.2_
   - _Boundary: tests/mcp/conftest.py_
 
-- [ ] 5.2 (P) Add `tests/mcp/test_embeddings.py`
+- [x] 5.2 (P) Add `tests/mcp/test_embeddings.py`
   - Cover `embed_query`, `embed_corpus` (including batch boundaries), `cosine_top_k` (with and without `restrict_to_ids`, including the smaller-than-k case), `_save_cache` + `_load_cache` round-trip, and the four invalidation paths (model-name mismatch, tweet-id set mismatch, schema-version mismatch, missing files).
   - Cover `open_or_build_corpus`: cold call invokes `_call_embeddings_api`; warm call against the same input does not.
   - Cover retry behavior: a stub that raises a transient error twice then returns vectors yields the vectors in three calls; a stub that raises persistently raises `EmbeddingError` after the documented retry cap.
@@ -157,7 +157,7 @@
   - _Boundary: tests/mcp/test_embeddings.py_
   - _Depends: 2.4_
 
-- [ ] 5.3 (P) Add `tests/mcp/test_bm25.py`
+- [x] 5.3 (P) Add `tests/mcp/test_bm25.py`
   - Cover `tokenize` on canned inputs (mixed case, leading/trailing punctuation, internal whitespace, empty string, all-punctuation string).
   - Cover `BM25Index.build` over a small hand-built corpus where one tweet contains the query terms strongly and others do not; assert top-K ordering.
   - Cover `restrict_to_ids` masking; assert smaller-than-k restricted scope returns every restricted candidate.
@@ -167,7 +167,7 @@
   - _Boundary: tests/mcp/test_bm25.py_
   - _Depends: 2.5_
 
-- [ ] 5.4 (P) Add `tests/mcp/test_fusion.py`
+- [x] 5.4 (P) Add `tests/mcp/test_fusion.py`
   - Cover RRF over two crafted rankings with overlapping and non-overlapping ids; assert the documented fused order.
   - Cover single-method input (`[]` for one ranking) returns the other ranking's order.
   - Cover both-empty returns `[]`.
@@ -178,7 +178,7 @@
   - _Boundary: tests/mcp/test_fusion.py_
   - _Depends: 2.6_
 
-- [ ] 5.5 Update `tests/mcp/test_index.py`
+- [x] 5.5 Update `tests/mcp/test_index.py`
   - Add tests for `TweetIndex._candidate_ids` (unset filter returns `None`; year-only returns the year's ids; tweets with unparseable `created_at` excluded under filter, included without).
   - Add tests for `TweetIndex.open_or_build` building and reusing the embedding cache (assert via the `_call_embeddings_api` call counter) and building the BM25 index.
   - Add tests for `TweetIndex.search` running both retrievals with the right `restrict_to_ids` and never invoking the walker on the default path (patch `walker.walk` to raise on invocation). Add a dense-down case (patch `_call_embeddings_api` to raise persistently) that succeeds via BM25 alone.
@@ -187,7 +187,7 @@
   - _Boundary: tests/mcp/test_index.py_
   - _Depends: 3.1, 3.2, 3.3_
 
-- [ ] 5.6 Update `tests/mcp/test_tools.py`
+- [x] 5.6 Update `tests/mcp/test_tools.py`
   - Replace existing walker-driven `search_likes` cases with hybrid-driven ones: assert the default call returns ranker-shaped dicts, never calls `walker.walk`, and uses the cosine score (or `0.0` when only BM25 had the id) as `walker_relevance`.
   - Add cases for `with_why=true`: walker is invoked exactly once over the top-20 ranked ids; merged `why`/`walker_relevance` reach the response; walker failure during the explainer is logged but not fatal.
   - Add `with_why` validation cases: non-bool raises `invalid_input`; absent and `False` are equivalent.
@@ -198,14 +198,14 @@
   - _Boundary: tests/mcp/test_tools.py_
   - _Depends: 4.1, 4.2_
 
-- [ ] 5.7 Verify walker module preservation and test-suite continuity
+- [x] 5.7 Verify walker module preservation and test-suite continuity
   - Run `pytest tests/mcp/test_walker.py` and confirm every existing case passes unchanged after the spec's edits land. The walker module should not be edited beyond optional docstring nudges; the `_call_chat_completions` mock seam stays in place as the walker tests use it.
   - Add a single regression assertion in `test_walker.py` (or a small new test) that grepping `x_likes_mcp/walker.py` still defines `_call_chat_completions`, and that no module under `x_likes_mcp/` other than `walker.py` issues `client.chat.completions.create` (a textual grep is sufficient).
   - Observable completion: `pytest tests/mcp/test_walker.py` is green and the regression assertion passes.
   - _Requirements: 11.1, 11.2, 11.3_
   - _Boundary: tests/mcp/test_walker.py_
 
-- [ ] 5.8 Update `tests/mcp/test_server_integration.py`
+- [x] 5.8 Update `tests/mcp/test_server_integration.py`
   - Drive `search_likes` through the in-process MCP server with the embedder seam patched and the walker patched to a canned response. Assert the JSON-schema for `search_likes` exposes `with_why`; assert the response shape is unchanged when `with_why=false`; assert the `why` field populates when `with_why=true`.
   - Confirm existing integration assertions (the four registered tools, ToolError -> error response, server stays alive on upstream failure) still hold.
   - Observable completion: the server-integration test file passes end-to-end with the new field exercised in both states.

@@ -15,6 +15,7 @@ validation).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -359,3 +360,62 @@ def test_walk_chunk_size_one_calls_helper_per_node(
     walk(tree, "q", ["2025-01"], _make_config(), chunk_size=1)
 
     assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Regression: walker preservation (task 5.7, requirements 11.1-11.3)
+#
+# These tests are passes-on-first-run regression anchors, not a TDD RED→GREEN
+# cycle. They guard the documented mock seam and the "walker is the only
+# chat.completions call site" invariant from drifting silently as the
+# fast-search work lands alongside the existing walker.
+
+
+class TestWalkerPreservation:
+    """Regression anchors for walker module preservation (req 11.1-11.3)."""
+
+    def test_walker_call_chat_completions_seam_preserved(self) -> None:
+        """``walker._call_chat_completions`` is the documented LLM mock seam.
+
+        The walker test suite and the explainer path patch this exact
+        attribute name; renaming or removing it would silently break every
+        walker test (they would fall back to the autouse ``_block_real_llm``
+        guard or, worse, hit the real network).
+        """
+
+        from x_likes_mcp import walker
+
+        assert hasattr(walker, "_call_chat_completions"), (
+            "walker._call_chat_completions is the documented LLM mock seam; "
+            "walker tests and the explainer path patch this name."
+        )
+        assert callable(walker._call_chat_completions)
+
+    def test_walker_is_only_chat_completions_call_site(self) -> None:
+        """Only ``walker.py`` may invoke ``client.chat.completions.create``.
+
+        ``embeddings.py`` talks to ``/v1/embeddings`` via
+        ``openai.embeddings.create`` (a different endpoint); no other module
+        in the package should call the chat-completions endpoint. This is a
+        grep-style invariant guard for requirement 11.4 / design boundary
+        commitments.
+        """
+
+        package_dir = Path(__file__).parent.parent.parent / "x_likes_mcp"
+        assert package_dir.is_dir(), f"Expected package at {package_dir}"
+
+        chat_pattern = re.compile(r"\.chat\.completions\.create")
+        offenders: list[Path] = []
+        for py_file in package_dir.rglob("*.py"):
+            if py_file.name == "walker.py":
+                continue
+            if "__pycache__" in py_file.parts:
+                continue
+            text = py_file.read_text(encoding="utf-8")
+            if chat_pattern.search(text):
+                offenders.append(py_file.relative_to(package_dir))
+        assert offenders == [], (
+            "Modules other than walker.py invoke openai chat.completions.create: "
+            f"{offenders}. By design, walker is the only chat-completions call "
+            "site (per req 11.4)."
+        )
