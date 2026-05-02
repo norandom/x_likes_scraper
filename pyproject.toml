@@ -25,6 +25,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "mcp>=1.0,<2.0",
     "openai>=1.0",
+    "rank_bm25>=0.2",
 ]
 
 [project.urls]
