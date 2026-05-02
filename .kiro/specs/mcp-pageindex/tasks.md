@@ -202,7 +202,7 @@
 
 ## 4. Tool handlers
 
-- [ ] 4.1 (P) Implement `tools.search_likes` and `tools.list_months`
+- [x] 4.1 (P) Implement `tools.search_likes` and `tools.list_months`
   - `search_likes(index, query, year=None, month_start=None, month_end=None)` strips the query, raises `errors.invalid_input("query", ...)` when empty
   - Validates filter shape (`year` is integer in valid range, `month_start`/`month_end` match `^(0[1-9]|1[0-2])$`); shape errors raise `errors.invalid_input("filter", ...)`
   - Calls `index.search(query, year, month_start, month_end)`; catches `ValueError` from the resolver and re-raises as `errors.invalid_input("filter", ...)`
@@ -214,7 +214,7 @@
   - _Depends: 2.2, 3.3d, 3.4_
   - _Boundary: x_likes_mcp/tools.py_
 
-- [ ] 4.2 (P) Implement `tools.get_month` and `tools.read_tweet`
+- [x] 4.2 (P) Implement `tools.get_month` and `tools.read_tweet`
   - `get_month(index, year_month)` validates `year_month` against `^\d{4}-\d{2}$`; raises `errors.invalid_input("year_month", ...)` when the pattern fails; calls `index.get_month_markdown`; raises `errors.not_found("month", year_month)` when the result is `None`; otherwise returns the Markdown string
   - `read_tweet(index, tweet_id)` validates `tweet_id` is non-empty and matches `^\d+$`; raises `errors.invalid_input("tweet_id", ...)` otherwise; calls `index.lookup_tweet`; raises `errors.not_found("tweet", tweet_id)` when missing; otherwise returns a dict with `tweet_id`, `handle`, `display_name`, `text`, `created_at`, `view_count`, `like_count`, `retweet_count`, `url` (omitting fields the source `Tweet` does not have)
   - Observable completion: with a mocked `TweetIndex`, `tools.get_month(index, "2025/01")` raises `invalid_input`; `tools.get_month(index, "2099-12")` (where `TweetIndex.get_month_markdown` returns `None`) raises `not_found`; `tools.read_tweet(index, "")` raises `invalid_input`; `tools.read_tweet(index, "abc")` raises `invalid_input`; `tools.read_tweet(index, "999")` against an `TweetIndex` that returns `None` raises `not_found`
