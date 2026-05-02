@@ -25,11 +25,48 @@ import pytest
 from x_likes_mcp import index as index_module
 from x_likes_mcp import ranker as ranker_module
 from x_likes_mcp import tree as tree_module
+from x_likes_mcp.bm25 import BM25Index
 from x_likes_mcp.config import Config, RankerWeights
+from x_likes_mcp.embeddings import CorpusEmbeddings, Embedder
 from x_likes_mcp.index import IndexError as MCPIndexError
 from x_likes_mcp.index import MonthInfo, TweetIndex
 from x_likes_mcp.ranker import ScoredHit
 from x_likes_mcp.walker import WalkerHit
+
+
+# ---------------------------------------------------------------------------
+# Embedder seam helpers (task 3.1)
+#
+# The dense-retrieval path in ``TweetIndex.open_or_build`` constructs a real
+# :class:`Embedder` and calls ``open_or_build_corpus``, which on a cache miss
+# invokes ``Embedder._call_embeddings_api``. Tests below patch that seam so
+# no real OpenRouter HTTP call escapes; the patch returns a deterministic
+# canned vector per input text.
+
+
+_FAKE_EMBED_DIM = 4
+
+
+def _patch_embedder(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Patch ``Embedder._call_embeddings_api`` with a deterministic stub.
+
+    Returns a dict carrying a ``"calls"`` counter so tests can assert that a
+    second ``open_or_build`` does not re-embed the corpus.
+    """
+
+    counter: dict[str, int] = {"calls": 0}
+
+    def _fake(self: Embedder, texts: list[str]) -> list[list[float]]:
+        counter["calls"] += 1
+        # One canned 4-d vector per text. The exact content does not matter
+        # for shape / cache assertions; we just need a stable, non-zero row.
+        return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(
+        "x_likes_mcp.embeddings.Embedder._call_embeddings_api",
+        _fake,
+    )
+    return counter
 
 
 # ---------------------------------------------------------------------------
@@ -498,3 +535,100 @@ def test_search_passes_recency_anchor_at_end_of_month_end(
     assert anchor.minute == 59
     assert anchor.tzinfo is not None
     assert anchor.utcoffset() == timezone.utc.utcoffset(anchor)
+
+
+# ---------------------------------------------------------------------------
+# open_or_build: dense + lexical wiring (task 3.1)
+
+
+def test_open_or_build_constructs_embedder(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``open_or_build`` constructs an :class:`Embedder` from the config's
+    OpenRouter fields and exposes it on the resulting :class:`TweetIndex`.
+    """
+
+    _patch_embedder(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    assert isinstance(idx.embedder, Embedder)
+    assert idx.embedder.model_name == fake_export.embedding_model
+    assert idx.embedder.base_url == fake_export.openrouter_base_url
+
+
+def test_open_or_build_builds_corpus_with_correct_shape(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The corpus matrix has shape ``(N, D)`` where ``N == len(tweets_by_id)``
+    and its ``ordered_ids`` covers every tweet id exactly once.
+    """
+
+    _patch_embedder(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    assert isinstance(idx.corpus, CorpusEmbeddings)
+    n = len(idx.tweets_by_id)
+    assert idx.corpus.matrix.shape == (n, _FAKE_EMBED_DIM)
+    assert set(idx.corpus.ordered_ids) == set(idx.tweets_by_id.keys())
+    # Cache layout requires sorted ids (open_or_build_corpus contract).
+    assert idx.corpus.ordered_ids == sorted(idx.tweets_by_id.keys())
+
+
+def test_open_or_build_builds_bm25_index(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The BM25 index is built over the same tweet ids and answers a query
+    without raising.
+    """
+
+    _patch_embedder(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    assert isinstance(idx.bm25, BM25Index)
+    assert idx.bm25.ordered_ids == sorted(idx.tweets_by_id.keys())
+    # Should answer a query without raising; the result list may be empty if
+    # the query has no overlap with the fixture text, but the call must not
+    # raise.
+    results = idx.bm25.top_k("any reasonable query", k=5)
+    assert isinstance(results, list)
+
+
+def test_open_or_build_reuses_embedding_cache_on_second_call(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Building the index a second time hits the on-disk embedding cache and
+    does NOT re-invoke the embeddings API. (BM25 is rebuilt in-memory each
+    time; that is by design.)
+    """
+
+    counter = _patch_embedder(monkeypatch)
+
+    TweetIndex.open_or_build(fake_export, _default_weights())
+    first_call_count = counter["calls"]
+    assert first_call_count >= 1, "first build should have called the embedder"
+
+    # Second build with the same config (same output_dir) reuses the cache.
+    TweetIndex.open_or_build(fake_export, _default_weights())
+
+    assert counter["calls"] == first_call_count, (
+        "second open_or_build with a valid embedding cache should not "
+        "re-invoke the embeddings API"
+    )
+
+
+def test_open_or_build_writes_cache_files(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a fresh build the corpus matrix and metadata sidecar exist on
+    disk under ``config.output_dir``.
+    """
+
+    _patch_embedder(monkeypatch)
+
+    TweetIndex.open_or_build(fake_export, _default_weights())
+
+    assert (fake_export.output_dir / "corpus_embeddings.npy").is_file()
+    assert (fake_export.output_dir / "corpus_embeddings.meta.json").is_file()

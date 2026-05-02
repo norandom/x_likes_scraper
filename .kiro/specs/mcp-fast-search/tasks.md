@@ -77,7 +77,7 @@
   - _Boundary: x_likes_mcp/fusion.py_
 
 - [ ] 3. Index integration
-- [ ] 3.1 Wire embedder, corpus, and BM25 into `TweetIndex.open_or_build`
+- [x] 3.1 Wire embedder, corpus, and BM25 into `TweetIndex.open_or_build`
   - Add `embedder: Embedder`, `corpus: CorpusEmbeddings`, and `bm25: BM25Index` fields on the `TweetIndex` dataclass.
   - In `TweetIndex.open_or_build`, after the existing tree + tweets-by-id + author-affinity steps:
     1. Construct `Embedder(api_key=config.openrouter_api_key, base_url=config.openrouter_base_url, model_name=config.embedding_model)`.

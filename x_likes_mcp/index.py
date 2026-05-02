@@ -32,7 +32,9 @@ from x_likes_exporter import iter_monthly_markdown, load_export
 from . import ranker as ranker_module
 from . import tree as tree_module
 from . import walker as walker_module
+from .bm25 import BM25Index
 from .config import Config, RankerWeights
+from .embeddings import CorpusEmbeddings, Embedder, open_or_build_corpus
 
 if TYPE_CHECKING:  # pragma: no cover
     from x_likes_exporter.models import Tweet
@@ -77,8 +79,11 @@ class TweetIndex:
     ``tweet.id``, the original ``list[Tweet]`` (used by ``list_months``
     for tweet counts), the ``paths_by_month`` map from ``YYYY-MM`` to the
     corresponding ``likes_YYYY-MM.md`` path, the precomputed
-    ``author_affinity`` dict, the loaded :class:`Config`, and the
-    :class:`RankerWeights`.
+    ``author_affinity`` dict, the loaded :class:`Config`, the
+    :class:`RankerWeights`, the :class:`Embedder` used for dense
+    retrieval, the :class:`CorpusEmbeddings` (matrix + ordered ids
+    aligned with ``tweets_by_id``), and the :class:`BM25Index` built
+    over the same corpus.
 
     Instances are read-only by convention: methods do not mutate any of
     the maps or the tree.
@@ -91,6 +96,9 @@ class TweetIndex:
     author_affinity: dict[str, float]
     config: Config
     weights: RankerWeights
+    embedder: Embedder
+    corpus: CorpusEmbeddings
+    bm25: BM25Index
 
     @classmethod
     def open_or_build(cls, config: Config, weights: RankerWeights) -> TweetIndex:
@@ -108,6 +116,9 @@ class TweetIndex:
           4. Load tweets via :func:`load_export` and key them by id.
           5. Build the ``paths_by_month`` map from filenames.
           6. Compute ``author_affinity``.
+          7. Build (or reuse the on-disk cache for) the dense corpus
+             via :func:`embeddings.open_or_build_corpus`, and build the
+             in-memory BM25 index via :meth:`BM25Index.build`.
 
         Raises:
             IndexError: when ``config.by_month_dir`` yields no
@@ -164,6 +175,19 @@ class TweetIndex:
         # 6. Precompute author affinity.
         author_affinity = _compute_author_affinity(tweets)
 
+        # 7. Construct the embedder, build/load the corpus embeddings, and
+        #    build the in-memory BM25 index. The dense path persists its
+        #    matrix + metadata under ``config.output_dir`` and is reused on
+        #    subsequent starts; the BM25 index is rebuilt in memory each
+        #    time (sub-second at this corpus scale).
+        embedder = Embedder(
+            api_key=config.openrouter_api_key,
+            base_url=config.openrouter_base_url,
+            model_name=config.embedding_model,
+        )
+        corpus = open_or_build_corpus(embedder, tweets_by_id, config.output_dir)
+        bm25 = BM25Index.build(tweets_by_id)
+
         return cls(
             tree=tree_obj,
             tweets_by_id=tweets_by_id,
@@ -172,6 +196,9 @@ class TweetIndex:
             author_affinity=author_affinity,
             config=config,
             weights=weights,
+            embedder=embedder,
+            corpus=corpus,
+            bm25=bm25,
         )
 
     # --- per-tweet / per-month read paths ---------------------------------

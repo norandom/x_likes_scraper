@@ -75,6 +75,40 @@ def _block_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _block_real_embeddings(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default-stub the OpenRouter embeddings seam for every MCP test.
+
+    ``TweetIndex.open_or_build`` (task 3.1 onward) constructs an
+    :class:`x_likes_mcp.embeddings.Embedder` and embeds the corpus at
+    cold-start. The fixture-backed :class:`Config` does not set
+    ``OPENROUTER_API_KEY``, so the real ``_call_embeddings_api`` would
+    raise :class:`EmbeddingError` before any test logic runs.
+
+    The stub returns a deterministic 4-dim canned vector per text. Tests
+    that need a different shape, a counter, or an error injection
+    re-patch the same attribute.
+
+    ``test_embeddings.py`` exercises ``_call_embeddings_api`` itself
+    (api-key guard, retry loop, response sorting); skipping the autouse
+    stub for that module lets those tests target the real implementation.
+    """
+
+    if request.node.fspath.basename == "test_embeddings.py":
+        return
+
+    def _fake(_self: object, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(
+        "x_likes_mcp.embeddings.Embedder._call_embeddings_api",
+        _fake,
+        raising=True,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_cookies_access() -> None:
     """Document the no-cookies-access invariant for the MCP test subtree.
 
