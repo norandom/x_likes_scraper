@@ -1,18 +1,21 @@
 """Per-month LLM walk over a :class:`TweetTree`.
 
-The walker is the single LLM call site in this package. It iterates the
-in-scope months chronologically, partitions each month's tweets into chunks
-of ``chunk_size``, and asks the model "which of these tweets are plausibly
-relevant to the user's query?" via one chat-completions call per chunk.
+This is the only place the package talks to a real model. For each
+in-scope month the walker chunks the tweets, hands one chunk per call
+to chat-completions, and asks "which of these are plausibly relevant
+to the user's query?". The model returns JSON; we parse, drop entries
+that fail validation (id not in chunk, relevance outside 0..1, etc.),
+trim ``why`` to 240 chars, and emit :class:`WalkerHit` instances.
 
-The OpenAI SDK is constructed without an explicit ``base_url``: the SDK reads
-``OPENAI_BASE_URL`` and ``OPENAI_API_KEY`` from ``os.environ`` at client-
-construction time, and :func:`x_likes_mcp.config.load_config` writes both
-into ``os.environ`` before any walker call. That is the env-var contract.
+Note on the OpenAI client: we build ``OpenAI()`` with no ``base_url``
+argument. The SDK reads ``OPENAI_BASE_URL`` and ``OPENAI_API_KEY``
+from the process environment when the client is constructed.
+``config.load_config`` writes both into ``os.environ`` first, which
+is how the user's local proxy URL gets picked up.
 
-Tests mock either :func:`walk` directly or the inner
-:func:`_call_chat_completions` helper. No real HTTP is made in the test
-suite.
+Tests stub either :func:`walk` or the :func:`_call_chat_completions`
+seam. The autouse guard in ``tests/mcp/conftest.py`` raises if any
+test forgets to stub it.
 """
 
 from __future__ import annotations

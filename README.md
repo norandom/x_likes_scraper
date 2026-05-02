@@ -112,7 +112,7 @@ Exporting tens of thousands of likes can take hours, and the run will eventually
 
 `python -m x_likes_mcp` (or `uv run x-likes-mcp`) starts a stdio MCP server that exposes the like history through four tools:
 
-- `search_likes(query, year, month_start, month_end)` — natural-language search ranked with a heavy-ranker-shape formula inspired by `twitter/the-algorithm`. The optional `year`/`month_start`/`month_end` pre-filter scopes which months the LLM walks (faster than open-ended searches).
+- `search_likes(query, year, month_start, month_end)` — natural-language search. The optional date filter scopes which months the LLM walks (faster than open-ended searches). Results are ranked using engagement counts, recency, and how often you've liked the same author before — design borrowed from `twitter/the-algorithm`'s heavy ranker for the features the export already has, not a port of it.
 - `list_months()` — months for which per-month Markdown exists, reverse-chronologically.
 - `get_month(year_month)` — raw Markdown for one month.
 - `read_tweet(tweet_id)` — one tweet's metadata by id.

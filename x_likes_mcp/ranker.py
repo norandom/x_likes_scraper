@@ -1,18 +1,17 @@
-"""Heavy-ranker-style scoring for tweet search results.
+"""Tweet scoring formula. Pure functions only.
 
-Combines the walker's LLM relevance score with engagement-derived
-features (favorite/retweet/reply/view counts), author affinity (how
-often the user has liked from this handle), recency decay, and a
-couple of small boosts (verified, has_media) into a single weighted
-score.
+The score combines the walker's LLM relevance number with engagement
+counts (favorite, retweet, reply, view), author affinity (log1p of how
+many times this user has liked the same handle), recency decay, and
+two small flags (verified, has_media). Everything is a single sum,
+weights from ``RankerWeights``.
 
-This is feature engineering inspired by the OSS dump of
-``twitter/the-algorithm``'s heavy ranker — NOT a port of the algorithm
-itself. We use the design idea (engagement and affinity matter) for
-the small subset of features that can be computed from the export
-data alone.
+The feature shape is borrowed from ``twitter/the-algorithm``'s heavy
+ranker for the bits the export actually has. It is not a port. The
+infrastructure-heavy parts (real-graph, SimClusters, TwHIN) don't
+apply to a single-user offline archive and aren't here.
 
-Pure module: no I/O, no LLM, no network, no openai import.
+No I/O, no LLM, no openai import.
 """
 
 from __future__ import annotations
