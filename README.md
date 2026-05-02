@@ -112,20 +112,37 @@ Exporting tens of thousands of likes can take hours, and the run will eventually
 
 `python -m x_likes_mcp` (or `uv run x-likes-mcp`) starts a stdio MCP server that exposes the like history through four tools:
 
-- `search_likes(query, year, month_start, month_end)` — natural-language search. The optional date filter scopes which months the LLM walks (faster than open-ended searches). Results are ranked using engagement counts, recency, and how often you've liked the same author before — design borrowed from `twitter/the-algorithm`'s heavy ranker for the features the export already has, not a port of it.
+- `search_likes(query, year, month_start, month_end, with_why)` — natural-language search. The default path runs hybrid recall (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion) over the entire corpus, then re-ranks with the engagement-and-affinity heavy ranker. No chat-completions call on the default path; one OpenRouter `/v1/embeddings` request per query. The optional date filter narrows the candidate set. Pass `with_why=true` to opt into a single walker chat-completions call that populates the `why` field on the top-20 results.
 - `list_months()` — months for which per-month Markdown exists, reverse-chronologically.
 - `get_month(year_month)` — raw Markdown for one month.
 - `read_tweet(tweet_id)` — one tweet's metadata by id.
+
+The ranker design is borrowed from `twitter/the-algorithm`'s heavy ranker for the features the export already has, not a port of it.
 
 ### Prerequisites
 
 1. `./scrape.sh` has been run at least once so `output/likes.json` and `output/by_month/` exist.
 2. If you upgraded from an earlier version, re-run `./scrape.sh --no-media --format markdown` once so per-month files reflect the new (h1-less) shape that the indexer expects.
-3. A local OpenAI-Chat-Completions-compatible LLM endpoint. Many local proxies (LiteLLM proxy server, vLLM, llama-cpp-server, Ollama, etc.) expose `/v1/chat/completions`.
+3. An OpenRouter API key. The dense retrieval path embeds queries (and, on first run, the whole corpus) through OpenRouter's `/v1/embeddings` endpoint. Sign up at [openrouter.ai](https://openrouter.ai); the default model is on the free tier.
+4. Optional: a local OpenAI-Chat-Completions-compatible LLM endpoint, only required when callers pass `with_why=true`. Many local proxies (LiteLLM proxy server, vLLM, llama-cpp-server, Ollama, etc.) expose `/v1/chat/completions`. The walker is the only chat-completions call site and is now opt-in; the default `search_likes` path makes no chat-completions call.
+
+### Why hosted dense embeddings (and not a local transformer)
+
+The dense retrieval path is network-based rather than running a local transformer. The maintainer's primary platform (Intel macOS x86_64) has no modern PyTorch or ONNX Runtime wheels — `sentence-transformers` and `fastembed` both refuse to install. OpenRouter exposes modern embedding models (default: NVIDIA's Nemotron VL 1B encoder) through the OpenAI-shape `/v1/embeddings` endpoint, which the existing `openai` SDK can reach by changing `base_url`. No new SDK dep, no transformer model in-process. The hybrid recall adds one new pure-python dep — `rank_bm25>=0.2`, ~50 KB, no native code.
 
 ### Configuration
 
-Three new variables in `.env`:
+OpenRouter (dense embeddings, required) in `.env`:
+
+```ini
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
+```
+
+`OPENROUTER_API_KEY` is required to start; `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api/v1` (override only if fronted by a different gateway); `EMBEDDING_MODEL` defaults to `nvidia/llama-nemotron-embed-vl-1b-v2:free` (free tier on OpenRouter at the time of writing). Changing the model name rebuilds the embedding cache from scratch.
+
+Walker / chat-completions endpoint (opt-in via `with_why=true`):
 
 ```ini
 OPENAI_BASE_URL=http://10.0.0.59:8317/v1
@@ -133,7 +150,7 @@ OPENAI_API_KEY=sk-dummy
 OPENAI_MODEL=claude-opus-4-1-20250805
 ```
 
-The `openai` Python SDK reads `OPENAI_BASE_URL` from the process environment at client-construction time, so any OpenAI-compatible endpoint works. The model string is what the endpoint expects (e.g. an Anthropic model name if the proxy maps OpenAI requests onto an Anthropic backend).
+The `openai` Python SDK reads `OPENAI_BASE_URL` from the process environment at client-construction time, so any OpenAI-compatible endpoint works. The model string is what the endpoint expects (e.g. an Anthropic model name if the proxy maps OpenAI requests onto an Anthropic backend). These three are unused on the default path and only consulted when a request sets `with_why=true`.
 
 Optional ranker weights (override the in-code defaults):
 
@@ -206,7 +223,17 @@ claude mcp add x-likes --scope user -- \
   uv run --directory /absolute/path/to/x_likes_exporter_py x-likes-mcp
 ```
 
-The first run builds a tree cache at `output/tweet_tree_cache.pkl` (mtime-invalidated against the per-month files). Subsequent starts are instant.
+### Caches and first-run cost
+
+The MCP server keeps three on-disk caches under the configured output directory:
+
+- `output/tweet_tree_cache.pkl` — the per-month tweet tree (mtime-invalidated against the per-month Markdown files).
+- `output/corpus_embeddings.npy` — float32 `(N, D)` matrix of L2-normalized tweet embeddings.
+- `output/corpus_embeddings.meta.json` — schema version, model name, tweet count, embedding dimensionality, ordered tweet ids.
+
+Embedding-cache invalidation is structural: rebuild on `EMBEDDING_MODEL` change, on tweet-id-set change (likes added or removed), or on schema-version bump.
+
+First run embeds the entire corpus (~7,780 tweets) via OpenRouter's free tier in roughly 12 minutes (244 batched requests at the free-tier ~20 RPM). Subsequent runs hit the disk cache and start in under a second. The per-query cost on a warm cache is one OpenRouter request (~80-300 ms over LAN/WAN); typical queries return in well under 2 seconds end-to-end.
 
 ## Usage examples
 

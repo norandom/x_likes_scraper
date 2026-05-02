@@ -214,7 +214,7 @@
   - _Depends: 4.3_
 
 - [ ] 6. Documentation and manual verification
-- [ ] 6.1 Update the README MCP section
+- [x] 6.1 Update the README MCP section
   - Add a paragraph describing the hybrid recall (BM25 + dense via OpenRouter, fused with RRF) + ranker default path, the `with_why` opt-in, the three new env vars (`OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `EMBEDDING_MODEL`) with defaults, and the install graph (one new pure-python dep, `rank_bm25`).
   - Document the new on-disk caches: `output/corpus_embeddings.npy` and `output/corpus_embeddings.meta.json`, alongside the existing `tweet_tree_cache.pkl`.
   - State that the walker remains the only chat-completions LLM call site and is now opt-in.
