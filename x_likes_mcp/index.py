@@ -15,6 +15,7 @@ Boundary: this module imports only from Spec 1's public read API
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import pickle  # nosem: avoid-pickle (single-user local cache, see comment in open_or_build)
@@ -31,15 +32,24 @@ from x_likes_exporter import iter_monthly_markdown, load_export
 
 from . import ranker as ranker_module
 from . import tree as tree_module
-from . import walker as walker_module
 from .bm25 import BM25Index
 from .config import Config, RankerWeights
-from .embeddings import CorpusEmbeddings, Embedder, open_or_build_corpus
+from .embeddings import (
+    CorpusEmbeddings,
+    Embedder,
+    EmbeddingError,
+    open_or_build_corpus,
+)
+from .fusion import DEFAULT_FUSED_TOP, DEFAULT_K_RRF, reciprocal_rank_fusion
+from .walker import WalkerHit
 
 if TYPE_CHECKING:  # pragma: no cover
     from x_likes_exporter.models import Tweet
 
     from .tree import TweetTree
+
+
+logger = logging.getLogger(__name__)
 
 
 # Filename pattern for per-month Markdown: matches ``likes_YYYY-MM.md``.
@@ -360,19 +370,99 @@ class TweetIndex:
         month_end: str | None = None,
         top_n: int = 50,
     ) -> list[ranker_module.ScoredHit]:
-        """Resolve filter, walk the in-scope subtree, rank, return top-N.
+        """Hybrid retrieval (BM25 + dense) → RRF fusion → ranker → top-N.
 
-        Walker and ranker exceptions propagate; the tools layer shapes
-        them into MCP error responses.
+        Algorithm (per design.md "TweetIndex deltas > search"):
+          1. ``candidate_ids = self._candidate_ids(...)``.
+          2. Run dense and BM25 retrieval in their own try/except blocks.
+             Each path's failure is logged once at ``WARNING`` and treated
+             as an empty ranking.
+          3. If both rankings are empty, raise :class:`EmbeddingError`
+             naming "both retrieval paths failed". ``tools.search_likes``
+             translates this into ``upstream_failure``.
+          4. Fuse the two rankings via :func:`reciprocal_rank_fusion`
+             (``k_rrf=60``, ``top=300`` by default).
+          5. Build ``dense_score_by_id`` from the dense ranking and
+             synthesize one :class:`WalkerHit` per fused id with
+             ``relevance`` set to that dense cosine score (or ``0.0`` if
+             only BM25 surfaced the id) and ``why=""``.
+          6. Hand the synthetic hits to :func:`ranker.rank` and return
+             the top-``top_n`` slice.
+
+        Empty corpus (``self.tweets_by_id`` is empty): return ``[]``
+        without raising. The "both retrievals failed" branch is reserved
+        for the genuine-failure case (req 7.6); a legitimately empty
+        corpus is not a failure (req 7.3).
+
+        The walker is no longer called from this method; the optional
+        explainer path lives in :mod:`x_likes_mcp.tools` and runs only
+        when ``tools.search_likes`` is invoked with ``with_why=True``.
         """
-        months_in_scope = self._resolve_filter(year, month_start, month_end)
+        # Empty-corpus short-circuit (req 7.3).
+        if not self.tweets_by_id:
+            return []
+
+        candidate_ids = self._candidate_ids(year, month_start, month_end)
         anchor = _compute_anchor(year, month_start, month_end)
 
-        walker_hits = walker_module.walk(
-            self.tree, query, months_in_scope, self.config
+        # Dense path. Any error (auth, network, malformed payload, numeric)
+        # degrades to an empty dense ranking. The single warning line is
+        # the operator's signal that the dense seam misbehaved.
+        dense_ranking: list[tuple[str, float]]
+        try:
+            query_vec = self.embedder.embed_query(query)
+            dense_ranking = self.embedder.cosine_top_k(
+                query_vec,
+                self.corpus,
+                k=200,
+                restrict_to_ids=candidate_ids,
+            )
+        except Exception as exc:  # noqa: BLE001 (broad on purpose; we degrade)
+            logger.warning("[search] dense retrieval failed: %s", exc)
+            dense_ranking = []
+
+        # BM25 path. ``rank_bm25`` is pure-python so this branch is unlikely
+        # to fire in practice, but we mirror the dense path's degradation
+        # for symmetry (req 7.5).
+        bm25_ranking: list[tuple[str, float]]
+        try:
+            bm25_ranking = self.bm25.top_k(
+                query, k=200, restrict_to_ids=candidate_ids
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[search] bm25 retrieval failed: %s", exc)
+            bm25_ranking = []
+
+        # Both retrievals down: cannot recover. Raise so tools.py can map
+        # to ``upstream_failure`` (req 7.6).
+        if not dense_ranking and not bm25_ranking:
+            raise EmbeddingError(
+                "both retrieval paths failed for this query"
+            )
+
+        dense_ids = [tid for tid, _ in dense_ranking]
+        bm25_ids = [tid for tid, _ in bm25_ranking]
+        dense_score_by_id: dict[str, float] = {
+            tid: score for tid, score in dense_ranking
+        }
+
+        fused_ids = reciprocal_rank_fusion(
+            [dense_ids, bm25_ids],
+            k_rrf=DEFAULT_K_RRF,
+            top=DEFAULT_FUSED_TOP,
         )
+
+        synthetic_hits = [
+            WalkerHit(
+                tweet_id=tid,
+                relevance=dense_score_by_id.get(tid, 0.0),
+                why="",
+            )
+            for tid in fused_ids
+        ]
+
         scored = ranker_module.rank(
-            walker_hits,
+            synthetic_hits,
             self.tweets_by_id,
             self.author_affinity,
             self.weights,

@@ -95,7 +95,7 @@
   - _Requirements: 4.4, 5.4_
   - _Boundary: x_likes_mcp/index.py_
 
-- [ ] 3.3 Refactor `TweetIndex.search` to drive the hybrid pipeline
+- [x] 3.3 Refactor `TweetIndex.search` to drive the hybrid pipeline
   - Replace the walker call in `TweetIndex.search` with the hybrid path:
     1. `candidate_ids = self._candidate_ids(...)`.
     2. Run dense and BM25 retrieval. Each path is wrapped in its own try/except: dense failure logs once and yields `[]`; BM25 failure logs once and yields `[]`. If both yield `[]`, raise `EmbeddingError` (or a new `RetrievalError`) up to `tools.py` which maps to `upstream_failure`. Otherwise proceed with whichever returned candidates.

@@ -1,14 +1,15 @@
 """Tests for :mod:`x_likes_mcp.index`.
 
 Covers :class:`TweetIndex.open_or_build`, the cache freshness logic,
-``_resolve_filter`` rule matrix, ``search`` orchestration (resolve →
-walk → rank), and the per-tweet / per-month read paths
-(``lookup_tweet``, ``list_months``, ``get_month_markdown``).
+``_resolve_filter`` rule matrix, ``_candidate_ids``, the hybrid
+``search`` flow (BM25 + dense → RRF → ranker), and the per-tweet /
+per-month read paths (``lookup_tweet``, ``list_months``,
+``get_month_markdown``).
 
-The walker is the only LLM call site in the package; every test below
-that exercises ``search`` replaces ``x_likes_mcp.walker.walk`` with a
-stub via ``monkeypatch.setattr`` so no real HTTP is made. The autouse
-``_block_real_llm`` fixture in ``tests/mcp/conftest.py`` is an
+After task 3.3 the walker is no longer called from ``index.py`` on the
+default search path. Tests below patch ``x_likes_mcp.walker.walk`` to
+raise on invocation so any accidental call would fail loudly. The
+autouse ``_block_real_llm`` fixture in ``tests/mcp/conftest.py`` is an
 additional safety net at the chat-completions seam.
 """
 
@@ -27,7 +28,7 @@ from x_likes_mcp import ranker as ranker_module
 from x_likes_mcp import tree as tree_module
 from x_likes_mcp.bm25 import BM25Index
 from x_likes_mcp.config import Config, RankerWeights
-from x_likes_mcp.embeddings import CorpusEmbeddings, Embedder
+from x_likes_mcp.embeddings import CorpusEmbeddings, Embedder, EmbeddingError
 from x_likes_mcp.index import IndexError as MCPIndexError
 from x_likes_mcp.index import MonthInfo, TweetIndex
 from x_likes_mcp.ranker import ScoredHit
@@ -478,102 +479,274 @@ def test_get_month_markdown_returns_none_for_missing_month(
 
 
 # ---------------------------------------------------------------------------
-# search orchestration
+# search orchestration (hybrid pipeline)
+#
+# After task 3.3 ``TweetIndex.search`` no longer calls the walker. It runs
+# dense + BM25 retrieval, fuses the rankings via RRF, synthesizes
+# WalkerHit-shaped inputs, and hands them to the ranker. The walker is
+# patched to raise on invocation in every test below so any accidental
+# call would fail loudly.
 
 
-def test_search_no_filter_passes_none_scope_to_walker(
+def _patch_walker_to_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch ``walker.walk`` to fail loudly on any invocation.
+
+    The default ``search`` path must never call the walker after task 3.3.
+    """
+
+    def _raise(*_args: object, **_kwargs: object) -> list[WalkerHit]:
+        raise AssertionError(
+            "walker.walk was called from TweetIndex.search; the hybrid "
+            "pipeline must not invoke the walker on the default path"
+        )
+
+    monkeypatch.setattr("x_likes_mcp.walker.walk", _raise)
+
+
+def test_search_returns_scored_hits_via_hybrid_path(
     fake_export: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``search`` without filter calls walker with ``months_in_scope=None``."""
+    """``search`` returns ranker-shaped ``ScoredHit`` instances via the
+    hybrid pipeline and never invokes the walker.
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
 
     idx = TweetIndex.open_or_build(fake_export, _default_weights())
-
-    captured: dict[str, Any] = {}
-
-    def fake_walk(tree, query, months_in_scope, config, chunk_size=30):
-        captured["tree"] = tree
-        captured["query"] = query
-        captured["months_in_scope"] = months_in_scope
-        captured["config"] = config
-        return []
-
-    monkeypatch.setattr("x_likes_mcp.walker.walk", fake_walk)
-
-    idx.search("anything")
-
-    assert captured["months_in_scope"] is None
-    assert captured["query"] == "anything"
-    assert captured["config"] is fake_export
-
-
-def test_search_filter_passes_resolved_months_to_walker(
-    fake_export: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``search`` with year+range filter calls walker with the resolved list."""
-
-    idx = TweetIndex.open_or_build(fake_export, _default_weights())
-
-    captured: dict[str, Any] = {}
-
-    def fake_walk(tree, query, months_in_scope, config, chunk_size=30):
-        captured["months_in_scope"] = months_in_scope
-        return []
-
-    monkeypatch.setattr("x_likes_mcp.walker.walk", fake_walk)
-
-    idx.search("anything", year=2025, month_start="01", month_end="02")
-
-    assert captured["months_in_scope"] == ["2025-01", "2025-02"]
-
-
-def test_search_year_only_resolves_full_year(
-    fake_export: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``search`` with year-only filter sends the 12-month list to the walker."""
-
-    idx = TweetIndex.open_or_build(fake_export, _default_weights())
-
-    captured: dict[str, Any] = {}
-
-    def fake_walk(tree, query, months_in_scope, config, chunk_size=30):
-        captured["months_in_scope"] = months_in_scope
-        return []
-
-    monkeypatch.setattr("x_likes_mcp.walker.walk", fake_walk)
-
-    idx.search("anything", year=2025)
-
-    assert captured["months_in_scope"] == [f"2025-{m:02d}" for m in range(1, 13)]
-
-
-def test_search_returns_results_sorted_descending_by_score(
-    fake_export: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``search`` returns the ranker output, sorted descending by score."""
-
-    idx = TweetIndex.open_or_build(fake_export, _default_weights())
-
-    # Three fixture ids; the walker reports them in arbitrary order with
-    # different relevance scores so the ranker can produce a meaningful
-    # sort.
-    walker_hits = [
-        WalkerHit(tweet_id="1001", relevance=0.4, why="low"),
-        WalkerHit(tweet_id="2001", relevance=0.9, why="high"),
-        WalkerHit(tweet_id="1002", relevance=0.6, why="mid"),
-    ]
-
-    def fake_walk(tree, query, months_in_scope, config, chunk_size=30):
-        return list(walker_hits)
-
-    monkeypatch.setattr("x_likes_mcp.walker.walk", fake_walk)
 
     results = idx.search("anything")
 
-    assert len(results) == 3
+    assert isinstance(results, list)
     assert all(isinstance(r, ScoredHit) for r in results)
-    # Descending by score.
+    # Should be sorted descending by score.
     scores = [r.score for r in results]
     assert scores == sorted(scores, reverse=True)
+    # The fixture has four tweets; all four should survive into the fused
+    # ranking when the filter is unset (BM25/dense return up to 200 each).
+    assert len(results) == len(idx.tweets_by_id)
+
+
+def test_search_uses_candidate_ids_filter(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both retrievers receive the resolved ``restrict_to_ids`` set when the
+    filter is active.
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    # Move "2001" into 2026 so a year filter splits the corpus.
+    idx.tweets_by_id["2001"].created_at = "Wed Feb 11 14:05:30 +0000 2026"
+
+    expected = {"2001"}
+    captured: dict[str, set[str] | None] = {"dense": None, "bm25": None}
+
+    real_cosine = Embedder.cosine_top_k
+
+    def spy_cosine(self, query_vec, corpus, k=200, restrict_to_ids=None):
+        captured["dense"] = restrict_to_ids
+        return real_cosine(self, query_vec, corpus, k=k, restrict_to_ids=restrict_to_ids)
+
+    real_bm25 = BM25Index.top_k
+
+    def spy_bm25(self, query, k=200, restrict_to_ids=None):
+        captured["bm25"] = restrict_to_ids
+        return real_bm25(self, query, k=k, restrict_to_ids=restrict_to_ids)
+
+    monkeypatch.setattr(Embedder, "cosine_top_k", spy_cosine)
+    monkeypatch.setattr(BM25Index, "top_k", spy_bm25)
+
+    idx.search("anything", year=2026)
+
+    assert captured["dense"] == expected
+    assert captured["bm25"] == expected
+
+
+def test_search_no_filter_passes_none_restrict_ids(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unset filter passes ``restrict_to_ids=None`` to both retrievers."""
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    captured: dict[str, Any] = {"dense_set": "unset", "bm25_set": "unset"}
+
+    real_cosine = Embedder.cosine_top_k
+
+    def spy_cosine(self, query_vec, corpus, k=200, restrict_to_ids=None):
+        captured["dense_set"] = restrict_to_ids
+        return real_cosine(self, query_vec, corpus, k=k, restrict_to_ids=restrict_to_ids)
+
+    real_bm25 = BM25Index.top_k
+
+    def spy_bm25(self, query, k=200, restrict_to_ids=None):
+        captured["bm25_set"] = restrict_to_ids
+        return real_bm25(self, query, k=k, restrict_to_ids=restrict_to_ids)
+
+    monkeypatch.setattr(Embedder, "cosine_top_k", spy_cosine)
+    monkeypatch.setattr(BM25Index, "top_k", spy_bm25)
+
+    idx.search("anything")
+
+    assert captured["dense_set"] is None
+    assert captured["bm25_set"] is None
+
+
+def test_search_does_not_call_walker_on_default_path(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``search`` never calls ``walker.walk`` on the default path."""
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    # No exception must escape — the patched walker would assert if reached.
+    results = idx.search("anything", year=2025, month_start="01", month_end="03")
+    assert isinstance(results, list)
+
+
+def test_search_empty_corpus_returns_empty(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An index with an empty ``tweets_by_id`` returns ``[]`` from search."""
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    # Surgically empty the corpus on the in-memory index without touching
+    # disk caches.
+    idx.tweets_by_id.clear()
+
+    assert idx.search("anything") == []
+
+
+def test_search_dense_down_falls_back_to_bm25(
+    fake_export: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the dense retrieval path raises, ``search`` falls back to BM25
+    and continues. A warning is logged on the dense failure.
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    def boom(self, query):  # noqa: ARG001
+        raise EmbeddingError("simulated dense failure")
+
+    monkeypatch.setattr(Embedder, "embed_query", boom)
+
+    with caplog.at_level("WARNING", logger="x_likes_mcp.index"):
+        results = idx.search("anything")
+
+    # BM25 ran fine; the call must succeed.
+    assert isinstance(results, list)
+    # A warning naming the dense failure was emitted.
+    assert any(
+        "dense retrieval failed" in record.message for record in caplog.records
+    )
+
+
+def test_search_bm25_down_falls_back_to_dense(
+    fake_export: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the BM25 path raises, ``search`` falls back to the dense ranking
+    alone and continues.
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    def boom(self, query, k=200, restrict_to_ids=None):  # noqa: ARG001
+        raise RuntimeError("simulated bm25 failure")
+
+    monkeypatch.setattr(BM25Index, "top_k", boom)
+
+    with caplog.at_level("WARNING", logger="x_likes_mcp.index"):
+        results = idx.search("anything")
+
+    assert isinstance(results, list)
+    assert any(
+        "bm25 retrieval failed" in record.message for record in caplog.records
+    )
+
+
+def test_search_both_down_raises_embedding_error(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When both retrievals fail, ``search`` raises ``EmbeddingError`` for
+    ``tools.search_likes`` to translate into ``upstream_failure``.
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    def dense_boom(self, query):  # noqa: ARG001
+        raise EmbeddingError("dense down")
+
+    def bm25_boom(self, query, k=200, restrict_to_ids=None):  # noqa: ARG001
+        raise RuntimeError("bm25 down")
+
+    monkeypatch.setattr(Embedder, "embed_query", dense_boom)
+    monkeypatch.setattr(BM25Index, "top_k", bm25_boom)
+
+    with pytest.raises(EmbeddingError):
+        idx.search("anything")
+
+
+def test_search_synthetic_hits_carry_dense_score_as_relevance(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The synthetic ``WalkerHit`` objects passed to the ranker carry the
+    dense cosine score as their ``relevance`` (or ``0.0`` when only BM25
+    had the id).
+    """
+
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
+
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+
+    captured: dict[str, list[WalkerHit]] = {}
+    real_rank = ranker_module.rank
+
+    def spy_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None):
+        captured["hits"] = list(walker_hits)
+        return real_rank(
+            walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor
+        )
+
+    monkeypatch.setattr("x_likes_mcp.ranker.rank", spy_rank)
+
+    idx.search("anything")
+
+    hits = captured["hits"]
+    assert all(isinstance(h, WalkerHit) for h in hits)
+    # ``why`` is empty on synthetic hits; the explainer path lives in
+    # ``tools.py`` and runs only when ``with_why=true``.
+    assert all(h.why == "" for h in hits)
+    # The synthetic relevance is in [0.0, 1.0] (cosine of L2-normalized
+    # vectors) or 0.0 if only BM25 surfaced the id.
+    assert all(0.0 <= h.relevance <= 1.0 for h in hits)
 
 
 def test_search_passes_recency_anchor_at_end_of_month_end(
@@ -583,12 +756,10 @@ def test_search_passes_recency_anchor_at_end_of_month_end(
     anchor at the end of February 2025 to the ranker.
     """
 
-    idx = TweetIndex.open_or_build(fake_export, _default_weights())
+    _patch_embedder(monkeypatch)
+    _patch_walker_to_raise(monkeypatch)
 
-    monkeypatch.setattr(
-        "x_likes_mcp.walker.walk",
-        lambda *args, **kwargs: [],
-    )
+    idx = TweetIndex.open_or_build(fake_export, _default_weights())
 
     captured: dict[str, Any] = {}
 
