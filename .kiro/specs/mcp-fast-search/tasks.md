@@ -131,7 +131,7 @@
   - _Requirements: 8.2, 8.3, 8.4, 11.1, 11.4_
   - _Boundary: x_likes_mcp/tools.py_
 
-- [ ] 4.3 Extend the `search_likes` MCP input schema with `with_why`
+- [x] 4.3 Extend the `search_likes` MCP input schema with `with_why`
   - In `server._search_likes_tool`, add a `with_why` boolean property to the input schema with `"default": false` and a one-line description matching the design.
   - Thread `arguments.get("with_why", False)` through `_dispatch` into `tools.search_likes`.
   - Update the `test_server_integration.py` schema-shape assertion so the new field is required to be present.

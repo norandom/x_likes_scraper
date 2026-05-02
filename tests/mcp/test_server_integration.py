@@ -13,11 +13,15 @@ public entry points covered are:
    :class:`ToolError` it would translate into an MCP error response on
    failure, which is the behaviour the spec pins down.
 
-The walker is the only LLM call site in the package; tests that need to
-drive ``search_likes`` end to end stub :func:`x_likes_mcp.walker.walk`
-with :func:`pytest.MonkeyPatch.setattr`. The autouse ``_block_real_llm``
-fixture in ``tests/mcp/conftest.py`` is an additional safety net at the
-chat-completions seam.
+The default ``search_likes`` path no longer touches the walker; it drives
+hybrid recall (BM25 + dense) through ``index.search``. Tests that need to
+exercise the explainer (``with_why=True``) stub
+:func:`x_likes_mcp.tools._call_walker_explainer` directly. Tests that need
+to simulate the both-retrievals-down failure mode patch
+:meth:`x_likes_mcp.embeddings.Embedder.embed_query` and
+:meth:`x_likes_mcp.bm25.BM25Index.top_k` to raise. The autouse
+``_block_real_llm`` and ``_block_real_embeddings`` fixtures in
+``tests/mcp/conftest.py`` keep all real network calls blocked by default.
 
 Boundary: tests/mcp/test_server_integration.py only.
 """
@@ -30,10 +34,11 @@ from typing import Any
 import pytest
 
 from x_likes_mcp import server as server_module
+from x_likes_mcp import tools as tools_module
 from x_likes_mcp.config import Config, RankerWeights
 from x_likes_mcp.errors import ToolError
 from x_likes_mcp.index import TweetIndex
-from x_likes_mcp.walker import WalkerError, WalkerHit
+from x_likes_mcp.walker import WalkerHit
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +70,8 @@ def test_build_tool_definitions_each_tool_has_non_empty_input_schema() -> None:
 def test_search_likes_schema_year_and_month_fields_are_optional() -> None:
     """``search_likes`` schema lists ``query`` as required and the three
     structured-filter fields (``year``, ``month_start``, ``month_end``)
-    as optional with the documented patterns/bounds.
+    plus the new ``with_why`` boolean as optional with the documented
+    patterns/bounds.
     """
 
     tools = server_module._build_tool_definitions()
@@ -73,13 +79,14 @@ def test_search_likes_schema_year_and_month_fields_are_optional() -> None:
     search = by_name["search_likes"]
     schema = search.inputSchema
 
-    # query is required; year/month_start/month_end are NOT.
+    # query is required; year/month_start/month_end/with_why are NOT.
     assert schema.get("required") == ["query"]
 
     props = schema["properties"]
     assert "year" in props
     assert "month_start" in props
     assert "month_end" in props
+    assert "with_why" in props
 
     # year: integer, lower-bound 2006.
     year_prop = props["year"]
@@ -99,6 +106,13 @@ def test_search_likes_schema_year_and_month_fields_are_optional() -> None:
         assert not compiled.match("00")
         assert not compiled.match("13")
         assert not compiled.match("1")
+
+    # with_why: boolean, default False, documented description.
+    with_why_prop = props["with_why"]
+    assert with_why_prop["type"] == "boolean"
+    assert with_why_prop["default"] is False
+    assert "description" in with_why_prop
+    assert with_why_prop["description"]
 
 
 # ---------------------------------------------------------------------------
@@ -123,19 +137,14 @@ def _build_index(fake_export: Config) -> TweetIndex:
 
 
 def test_dispatch_search_likes_returns_documented_payload(
-    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+    fake_export: Config,
 ) -> None:
-    """A stubbed walker run flows through ``_dispatch`` and produces the
-    documented ``{"results": [hit, ...]}`` structured payload, with each
-    hit carrying the eight documented keys.
+    """The default ``search_likes`` path drives hybrid recall via the
+    autouse-stubbed embedder seam plus the real BM25 index, then runs
+    the ranker. The structured payload is ``{"results": [hit, ...]}``
+    and each hit carries the eight documented keys. The walker is never
+    invoked on the default path (``with_why=False``).
     """
-
-    def fake_walk(tree, query, months_in_scope, config, chunk_size=30):
-        # Return one hit pointing at a real fixture tweet so the tools
-        # layer has metadata to shape into the response.
-        return [WalkerHit(tweet_id="1001", relevance=0.9, why="thematic match")]
-
-    monkeypatch.setattr("x_likes_mcp.walker.walk", fake_walk)
 
     index = _build_index(fake_export)
     # build_server has the side effect of registering the handlers; we
@@ -149,7 +158,9 @@ def test_dispatch_search_likes_returns_documented_payload(
     assert "results" in payload
     results = payload["results"]
     assert isinstance(results, list)
-    assert len(results) == 1
+    # The fake_export fixture has a small but non-empty corpus; hybrid
+    # recall over it produces at least one ranked hit.
+    assert len(results) >= 1
 
     hit = results[0]
     assert set(hit.keys()) == {
@@ -162,12 +173,70 @@ def test_dispatch_search_likes_returns_documented_payload(
         "why",
         "feature_breakdown",
     }
-    assert hit["tweet_id"] == "1001"
-    assert hit["walker_relevance"] == pytest.approx(0.9)
-    # The walker's `why` is preserved (truncated to 240 chars upstream).
-    assert hit["why"] == "thematic match"
-    # year_month is resolved from the real Tweet's created_at.
-    assert hit["year_month"] == "2025-01"
+    # Default path: walker did not run, so `why` is empty (req 8.1 / 7.8).
+    assert hit["why"] == ""
+    # walker_relevance is the cosine score, clamped to [0, 1].
+    assert 0.0 <= hit["walker_relevance"] <= 1.0
+
+
+def test_dispatch_search_likes_with_why_true_integrates(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ``with_why=True``, ``_dispatch`` runs hybrid recall + ranker
+    and then invokes the walker explainer. The walker's ``why`` and
+    ``relevance`` for matching ids reach the response unchanged (req 8.2,
+    8.3).
+    """
+
+    # Patch the explainer helper rather than walker.walk so the test does
+    # not have to construct a synthetic TweetTree. Returning a hit for a
+    # real fixture tweet id lets the merge step land on that result.
+    captured: dict[str, Any] = {"calls": 0, "query": None, "top_ids": None}
+
+    def fake_explainer(top_results, query, index):
+        captured["calls"] += 1
+        captured["query"] = query
+        captured["top_ids"] = [hit.tweet_id for hit in top_results]
+        return {
+            "1001": WalkerHit(
+                tweet_id="1001", relevance=0.87, why="explainer rationale"
+            )
+        }
+
+    monkeypatch.setattr(tools_module, "_call_walker_explainer", fake_explainer)
+
+    index = _build_index(fake_export)
+    server_module.build_server(index)
+
+    payload = server_module._dispatch(
+        index, "search_likes", {"query": "test", "with_why": True}
+    )
+
+    assert captured["calls"] == 1
+    assert captured["query"] == "test"
+    # Top-20 cap is enforced inside tools.search_likes; with the small
+    # fixture corpus we get fewer than that.
+    assert captured["top_ids"], "explainer received an empty top-results list"
+
+    results = payload["results"]
+    # Find the merged hit (if "1001" is among the ranker's top results).
+    merged = [h for h in results if h["tweet_id"] == "1001"]
+    if merged:
+        hit = merged[0]
+        assert hit["why"] == "explainer rationale"
+        assert hit["walker_relevance"] == pytest.approx(0.87)
+    # Either way, every result still carries the documented keys.
+    for hit in results:
+        assert set(hit.keys()) == {
+            "tweet_id",
+            "year_month",
+            "handle",
+            "snippet",
+            "score",
+            "walker_relevance",
+            "why",
+            "feature_breakdown",
+        }
 
 
 def test_dispatch_search_likes_blank_query_raises_invalid_input_tool_error(
@@ -240,19 +309,28 @@ def test_dispatch_search_likes_blank_query_translates_via_call_tool_wrapper(
     assert "query" in inner.structuredContent["error"]["message"]
 
 
-def test_dispatch_search_likes_walker_failure_becomes_upstream_failure_tool_error(
+def test_dispatch_search_likes_both_retrievals_down_becomes_upstream_failure(
     fake_export: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A :class:`WalkerError` raised by the stubbed walker propagates out
-    of ``_dispatch`` as a :class:`ToolError` with category
-    ``upstream_failure`` — this is the translation the
-    :func:`tools.search_likes` layer performs.
+    """When both retrieval paths in ``index.search`` fail (dense via the
+    embedder seam, BM25 via :meth:`BM25Index.top_k`), the resulting
+    :class:`EmbeddingError` propagates out of ``_dispatch`` as a
+    :class:`ToolError` with category ``upstream_failure`` — the
+    translation :func:`tools.search_likes` performs (req 7.6).
     """
 
-    def boom(tree, query, months_in_scope, config, chunk_size=30):
-        raise WalkerError("LLM down")
+    def dense_boom(self, query):
+        raise RuntimeError("embeddings API down")
 
-    monkeypatch.setattr("x_likes_mcp.walker.walk", boom)
+    def bm25_boom(self, query, k=200, restrict_to_ids=None):
+        raise RuntimeError("bm25 down")
+
+    monkeypatch.setattr(
+        "x_likes_mcp.embeddings.Embedder.embed_query", dense_boom
+    )
+    monkeypatch.setattr(
+        "x_likes_mcp.bm25.BM25Index.top_k", bm25_boom
+    )
 
     index = _build_index(fake_export)
     server_module.build_server(index)
@@ -261,30 +339,38 @@ def test_dispatch_search_likes_walker_failure_becomes_upstream_failure_tool_erro
         server_module._dispatch(index, "search_likes", {"query": "anything"})
 
     assert excinfo.value.category == "upstream_failure"
-    assert "LLM down" in excinfo.value.message
+    assert "both retrieval paths failed" in excinfo.value.message
 
 
-def test_dispatch_list_months_succeeds_after_walker_failure(
+def test_dispatch_list_months_succeeds_after_search_failure(
     fake_export: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After a simulated walker failure, a fresh ``list_months`` dispatch
-    against the same in-process server still succeeds. The server does
-    not crash on the prior failure.
+    """After a simulated dual-retrieval failure, a fresh ``list_months``
+    dispatch against the same in-process server still succeeds. The
+    server stays alive across tool errors.
     """
 
-    def boom(tree, query, months_in_scope, config, chunk_size=30):
-        raise WalkerError("transient")
+    def dense_boom(self, query):
+        raise RuntimeError("embeddings API down")
 
-    monkeypatch.setattr("x_likes_mcp.walker.walk", boom)
+    def bm25_boom(self, query, k=200, restrict_to_ids=None):
+        raise RuntimeError("bm25 down")
+
+    monkeypatch.setattr(
+        "x_likes_mcp.embeddings.Embedder.embed_query", dense_boom
+    )
+    monkeypatch.setattr(
+        "x_likes_mcp.bm25.BM25Index.top_k", bm25_boom
+    )
 
     index = _build_index(fake_export)
     server_module.build_server(index)
 
-    # First call raises (walker is down).
+    # First call raises (both retrievals are down).
     with pytest.raises(ToolError):
         server_module._dispatch(index, "search_likes", {"query": "any"})
 
-    # Second call to a non-walker tool still works.
+    # Second call to a non-search tool still works.
     payload = server_module._dispatch(index, "list_months", {})
 
     assert isinstance(payload, dict)

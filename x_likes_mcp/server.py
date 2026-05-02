@@ -116,6 +116,14 @@ def _search_likes_tool(year_max: int) -> mcp_types.Tool:
                 "pattern": "^(0[1-9]|1[0-2])$",
                 "description": "Optional zero-padded month (01..12). Requires month_start.",
             },
+            "with_why": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Optional: run the walker LLM over the top hits to "
+                    "populate `why`. Off by default."
+                ),
+            },
         },
         "required": ["query"],
         "additionalProperties": False,
@@ -130,8 +138,10 @@ def _search_likes_tool(year_max: int) -> mcp_types.Tool:
         name="search_likes",
         description=(
             "Search the user's liked tweets by natural-language query. "
-            "Optional year/month_start/month_end pre-filter narrows the "
-            "set of months the walker LLM looks at."
+            "Default path runs hybrid recall (BM25 + dense) + ranker with "
+            "zero chat-completions calls. Optional year/month_start/"
+            "month_end pre-filter narrows the corpus. Pass with_why=true "
+            "to run the walker LLM over the top hits and populate `why`."
         ),
         inputSchema=input_schema,
         outputSchema=output_schema,
@@ -273,6 +283,7 @@ def _dispatch(
             year=arguments.get("year"),
             month_start=arguments.get("month_start"),
             month_end=arguments.get("month_end"),
+            with_why=arguments.get("with_why", False),
         )
         return {"results": results}
 
