@@ -224,7 +224,7 @@
 
 ## 5. MCP server wiring
 
-- [ ] 5.1 Implement `server.build_server(index)` with tool registration and JSON schemas
+- [x] 5.1 Implement `server.build_server(index)` with tool registration and JSON schemas
   - Construct an MCP `Server` instance with name `"x-likes-mcp"` and `version=__version__`
   - Register the four tools using the SDK's tool-registration API; declare input/output JSON schemas inline
   - `search_likes` schema: `query` required string, `year` optional integer with min 2006 and max equal to current year, `month_start` and `month_end` optional strings with `pattern: "^(0[1-9]|1[0-2])$"`; output is array of objects with `tweet_id`, `year_month`, `handle`, `snippet`, `score`, `walker_relevance`, `why`, `feature_breakdown`
@@ -238,7 +238,7 @@
   - _Depends: 4.1, 4.2_
   - _Boundary: x_likes_mcp/server.py_
 
-- [ ] 5.2 Implement `__main__.main()` startup pipeline
+- [x] 5.2 Implement `__main__.main()` startup pipeline
   - Replace the placeholder `main()` with the real pipeline: `load_config()` → `load_ranker_weights()` → `TweetIndex.open_or_build(config, weights)` → `server.run(index)` → return 0
   - Catch `ConfigError`, `IndexError`, `FileNotFoundError` at the top of `main`; print one stderr line naming the failing condition; return exit code 2
   - Other exceptions during startup propagate (intentional: real bugs surface as tracebacks)
