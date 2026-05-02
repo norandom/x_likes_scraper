@@ -58,7 +58,7 @@
   - _Boundary: x_likes_mcp/embeddings.py_
   - _Depends: 2.1, 2.2, 2.3_
 
-- [ ] 2.5 Implement the BM25 module
+- [x] 2.5 Implement the BM25 module
   - Create `x_likes_mcp/bm25.py` with the deterministic `tokenize(text)` function (`re.split(r"\s+", text.lower())` + strip leading/trailing non-word chars + drop empties), the `BM25Index` dataclass, and `BM25Index.build(tweets_by_id)` and `BM25Index.top_k(query, k=200, restrict_to_ids=None)` methods as specified in the design.
   - `BM25Index.build`: `ordered_ids = sorted(tweets_by_id.keys())`, `tokenized = [tokenize(tweets_by_id[i].text or "") for i in ordered_ids]`, `bm25 = BM25Okapi(tokenized)`. Return the dataclass.
   - `BM25Index.top_k`: tokenize the query; if it produces no tokens, return `[]`. Compute `scores = bm25.get_scores(query_tokens)`. If `restrict_to_ids` is provided, set non-restricted positions to `-inf` before taking top-k. Return `list[tuple[str, float]]` in descending score order; when the restricted scope is smaller than `k`, return every restricted candidate that scored above `-inf`.
