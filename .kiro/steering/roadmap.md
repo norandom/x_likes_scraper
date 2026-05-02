@@ -38,3 +38,8 @@ When both ship, the workflow is "scrape, then talk to your likes."
 
 - [x] codebase-foundation -- pytest suite for the lib, a public read API, refactors only where needed for testability or extension. Dependencies: none. Spec docs ready (requirements.md, design.md, tasks.md).
 - [x] mcp-pageindex -- stdio MCP server using PageIndex over `output/by_month/`. Dependencies: codebase-foundation. Spec docs ready (requirements.md, design.md, tasks.md).
+- [ ] mcp-fast-search -- replace the LLM-walker hot path in `search_likes` with local-embedding retrieval + the existing ranker; optional LLM explainer over top hits. Dependencies: mcp-pageindex.
+
+## Phase 2 retrospective (2026-05-02)
+
+mcp-pageindex shipped functionally complete (149 tests green, all four MCP tools registered with Claude Code) but the search hot path doesn't scale to a real archive. The walker calls the LLM once per chunk per month; for 4 months covering ~2,200 tweets that's 60+ sequential LLM calls, busting MCP client timeouts. The ranker formula and tool surface are sound; the retrieval layer is the part that needs replacing. mcp-fast-search owns that.
