@@ -427,6 +427,285 @@ def test_search_likes_with_why_true_partial_merge_preserves_order(
     assert result[2]["walker_relevance"] == 0.2
 
 
+# ---------------------------------------------------------------------------
+# _call_walker_explainer — synthetic single-chunk tree
+
+
+def _make_tree_node(tweet_id: str, *, year_month: str = "2025-01") -> TreeNode:
+    """Build a synthetic :class:`TreeNode` for explainer tests."""
+    return TreeNode(
+        year_month=year_month,
+        tweet_id=tweet_id,
+        handle="alice",
+        text=f"text for {tweet_id}",
+        raw_section=f"### [@alice](https://x.com/alice)\ntext for {tweet_id}",
+    )
+
+
+def _make_explainer_index(
+    *,
+    nodes_by_id: dict[str, TreeNode] | None = None,
+    config: object | None = None,
+) -> MagicMock:
+    """Build a mock index with a real :class:`TweetTree` and a config attr.
+
+    The explainer reads ``index.tree.nodes_by_id`` and ``index.config``;
+    the synthetic tree it constructs is passed to ``walker.walk`` so the
+    field shapes must match the real :class:`TweetTree` dataclass.
+    """
+    nodes_by_id = nodes_by_id or {}
+    idx = MagicMock(name="TweetIndex")
+    idx.tree = TweetTree(
+        nodes_by_month={"2025-01": list(nodes_by_id.values())},
+        nodes_by_id=dict(nodes_by_id),
+    )
+    idx.config = config if config is not None else MagicMock(name="Config")
+    return idx
+
+
+def test_call_walker_explainer_calls_walker_walk_with_top_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The helper invokes ``walker.walk`` once with a synthetic single-chunk tree.
+
+    The synthetic tree carries the looked-up ``TreeNode`` objects under
+    one synthetic month key, ``months_in_scope`` lists that month, and
+    ``chunk_size`` matches the node count so the walker issues a single
+    LLM call (req 8.2).
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_walk(**kwargs: object) -> list[WalkerHit]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _fake_walk)
+
+    nodes = {
+        "1001": _make_tree_node("1001"),
+        "1002": _make_tree_node("1002"),
+    }
+    config_sentinel = object()
+    idx = _make_explainer_index(nodes_by_id=nodes, config=config_sentinel)
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+        ScoredHit(
+            tweet_id="1002",
+            score=9.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+    ]
+
+    result = tools._call_walker_explainer(scored, "deep query", idx)
+
+    assert result == {}
+    # Walker called exactly once with the documented kwargs.
+    assert captured["query"] == "deep query"
+    assert captured["chunk_size"] == 2
+    assert captured["config"] is config_sentinel
+    months_in_scope = captured["months_in_scope"]
+    synthetic_tree = captured["tree"]
+    assert isinstance(synthetic_tree, TweetTree)
+    # Synthetic tree has exactly one month entry, named after the synthetic key.
+    assert list(synthetic_tree.nodes_by_month.keys()) == months_in_scope
+    [synth_month] = synthetic_tree.nodes_by_month.keys()
+    # months_in_scope contains the same single synthetic month.
+    assert months_in_scope == [synth_month]
+    # Synthetic chunk holds the looked-up TreeNodes for the supplied hits.
+    chunk = synthetic_tree.nodes_by_month[synth_month]
+    assert [n.tweet_id for n in chunk] == ["1001", "1002"]
+
+
+def test_call_walker_explainer_returns_walker_hit_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``walker.walk`` results become a ``{tweet_id: WalkerHit}`` map."""
+    canned = [
+        WalkerHit(tweet_id="1001", relevance=0.9, why="match"),
+        WalkerHit(tweet_id="1002", relevance=0.4, why="weak"),
+    ]
+    monkeypatch.setattr(
+        "x_likes_mcp.tools.walker_module.walk",
+        lambda **_kw: canned,
+    )
+
+    nodes = {
+        "1001": _make_tree_node("1001"),
+        "1002": _make_tree_node("1002"),
+    }
+    idx = _make_explainer_index(nodes_by_id=nodes)
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+        ScoredHit(
+            tweet_id="1002",
+            score=9.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+    ]
+
+    result = tools._call_walker_explainer(scored, "q", idx)
+    assert result == {
+        "1001": canned[0],
+        "1002": canned[1],
+    }
+
+
+def test_call_walker_explainer_walker_failure_returns_empty_map(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Any walker failure becomes an empty map plus a single stderr line (req 8.4)."""
+
+    def _boom(**_kwargs: object) -> list[WalkerHit]:
+        raise RuntimeError("upstream gone")
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _boom)
+
+    nodes = {"1001": _make_tree_node("1001")}
+    idx = _make_explainer_index(nodes_by_id=nodes)
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        )
+    ]
+
+    result = tools._call_walker_explainer(scored, "q", idx)
+    assert result == {}
+    captured = capsys.readouterr()
+    # One line on stderr; stdout untouched.
+    assert "walker call failed" in captured.err
+    assert "upstream gone" in captured.err
+    assert captured.out == ""
+
+
+def test_call_walker_explainer_walker_error_returns_empty_map(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A :class:`WalkerError` (LLM-side failure) is also swallowed."""
+
+    def _boom(**_kwargs: object) -> list[WalkerHit]:
+        raise WalkerError("LLM said no")
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _boom)
+
+    nodes = {"1001": _make_tree_node("1001")}
+    idx = _make_explainer_index(nodes_by_id=nodes)
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        )
+    ]
+
+    assert tools._call_walker_explainer(scored, "q", idx) == {}
+    assert "LLM said no" in capsys.readouterr().err
+
+
+def test_call_walker_explainer_empty_top_results_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ``top_results`` short-circuits without calling ``walker.walk``."""
+
+    def _explode(**_kwargs: object) -> list[WalkerHit]:
+        raise AssertionError("walker.walk must not be called for empty top_results")
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _explode)
+
+    idx = _make_explainer_index(nodes_by_id={})
+    assert tools._call_walker_explainer([], "q", idx) == {}
+
+
+def test_call_walker_explainer_missing_tree_nodes_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When none of the top_results' ids are in the tree, return ``{}`` without calling walker."""
+
+    def _explode(**_kwargs: object) -> list[WalkerHit]:
+        raise AssertionError("walker.walk must not be called when no nodes resolve")
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _explode)
+
+    # nodes_by_id is empty but we pass a ScoredHit that won't resolve.
+    idx = _make_explainer_index(nodes_by_id={})
+    scored = [
+        ScoredHit(
+            tweet_id="9999",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        )
+    ]
+    assert tools._call_walker_explainer(scored, "q", idx) == {}
+
+
+def test_call_walker_explainer_partial_missing_nodes_skips_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hits whose ids aren't in the tree are dropped from the synthetic chunk;
+    resolved hits still flow through to the walker."""
+    captured: dict[str, object] = {}
+
+    def _fake_walk(**kwargs: object) -> list[WalkerHit]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("x_likes_mcp.tools.walker_module.walk", _fake_walk)
+
+    # Only 1001 has a TreeNode; 9999 will be silently skipped.
+    nodes = {"1001": _make_tree_node("1001")}
+    idx = _make_explainer_index(nodes_by_id=nodes)
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+        ScoredHit(
+            tweet_id="9999",
+            score=9.0,
+            walker_relevance=0.5,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+    ]
+    tools._call_walker_explainer(scored, "q", idx)
+    chunk = captured["tree"].nodes_by_month[captured["months_in_scope"][0]]
+    assert [n.tweet_id for n in chunk] == ["1001"]
+    # chunk_size sized to actual chunk, not requested length.
+    assert captured["chunk_size"] == 1
+
+
+# ---------------------------------------------------------------------------
+# search_likes — with_why semantics (continued)
+
+
 def test_search_likes_non_bool_with_why_raises_invalid_input() -> None:
     """A non-bool, non-None ``with_why`` raises ``invalid_input``."""
     idx = _make_index_mock()

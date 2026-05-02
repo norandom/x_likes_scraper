@@ -23,9 +23,12 @@ directly.
 from __future__ import annotations
 
 import re
+import sys
 from typing import TYPE_CHECKING, Any
 
 from . import errors
+from . import walker as walker_module
+from .tree import TweetTree
 
 if TYPE_CHECKING:  # pragma: no cover
     from .index import TweetIndex
@@ -209,6 +212,9 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
 _EXPLAINER_TOP_N = 20
 
 
+_EXPLAINER_SYNTHETIC_MONTH = "explainer-chunk"
+
+
 def _call_walker_explainer(
     top_results: list[ScoredHit],
     query: str,
@@ -219,18 +225,52 @@ def _call_walker_explainer(
 
     This is the only place :func:`x_likes_mcp.walker.walk` is invoked from
     the tool layer; the default ``search_likes`` path never touches it.
-    Failures (including :class:`x_likes_mcp.walker.WalkerError`) are caught
-    inside the helper, logged once to stderr, and surface as an empty map so
-    the surrounding call still succeeds with cosine-derived placeholders
-    (req 8.4).
 
-    Stub: the body is empty — task 4.2 of the ``mcp-fast-search`` spec
-    replaces it with the real explainer that drives ``walker.walk`` over
-    a synthetic single-chunk tree. Until then, ``with_why=True`` calls
-    receive the cosine-derived placeholders the ranker already populated
-    on each :class:`ScoredHit`.
+    Implementation: builds a synthetic in-memory :class:`TweetTree` whose
+    ``nodes_by_month`` maps a single synthetic month key to the up-to-20
+    :class:`TreeNode` objects pulled from ``index.tree.nodes_by_id`` for
+    the supplied ``top_results``. The walker is invoked with
+    ``chunk_size=len(synthetic_nodes)`` so it issues exactly one LLM call
+    over the whole batch (req 8.2). Order is irrelevant inside the walker
+    — the merge in ``_merge_explainer`` preserves the ranker's order
+    (req 8.3).
+
+    Failures (any exception, including :class:`x_likes_mcp.walker.WalkerError`,
+    network errors, missing config) are caught here, logged once to stderr,
+    and surface as an empty map so the surrounding ``search_likes`` call
+    still succeeds with cosine-derived placeholders (req 8.4).
     """
-    return {}
+    if not top_results:
+        return {}
+
+    try:
+        synthetic_nodes = []
+        for hit in top_results:
+            node = index.tree.nodes_by_id.get(hit.tweet_id)
+            if node is None:
+                continue
+            synthetic_nodes.append(node)
+
+        if not synthetic_nodes:
+            return {}
+
+        synthetic_tree = TweetTree(
+            nodes_by_month={_EXPLAINER_SYNTHETIC_MONTH: synthetic_nodes},
+            nodes_by_id=index.tree.nodes_by_id,
+        )
+
+        walker_hits = walker_module.walk(
+            tree=synthetic_tree,
+            query=query,
+            months_in_scope=[_EXPLAINER_SYNTHETIC_MONTH],
+            config=index.config,
+            chunk_size=len(synthetic_nodes),
+        )
+    except Exception as exc:  # noqa: BLE001 — explainer must not fail the call
+        print(f"[explainer] walker call failed: {exc}", file=sys.stderr)
+        return {}
+
+    return {hit.tweet_id: hit for hit in walker_hits}
 
 
 def search_likes(

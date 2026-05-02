@@ -122,7 +122,7 @@
   - _Boundary: x_likes_mcp/tools.py_
   - _Depends: 3.3_
 
-- [ ] 4.2 Implement `_call_walker_explainer` over a synthetic single-chunk tree
+- [x] 4.2 Implement `_call_walker_explainer` over a synthetic single-chunk tree
   - Build a small in-memory `TweetTree`-shaped object whose `nodes_by_month` contains exactly one month key and a list of up to 20 `TreeNode`s drawn from `index.tree.nodes_by_id` for the top-20 ranked tweet ids.
   - Call `walker.walk(synthetic_tree, query, months_in_scope=[<the synthetic month>], config=index.config, chunk_size=20)` so the walker issues exactly one chat-completions call.
   - Build a `tweet_id -> WalkerHit` map from the result.
