@@ -288,3 +288,47 @@ def test_parse_tweet_quote_flag():
     assert tweet is not None
     assert tweet.is_quote is True
     assert tweet.is_retweet is False
+
+
+def test_parse_tweet_reads_screen_name_from_core_block() -> None:
+    """X moved screen_name and name from legacy to a new 'core' sub-block.
+
+    The parser must read from user_results.core first and fall back to
+    user_results.legacy when core is absent. This regression check covers
+    the May 2026 API drift that surfaced empty handles on a fresh scrape
+    even though the request and response otherwise looked healthy.
+    """
+    tweet_data = {
+        "rest_id": "9999",
+        "core": {
+            "user_results": {
+                "result": {
+                    "rest_id": "u9",
+                    # Brand-new shape: screen_name and name only in core.
+                    "core": {"screen_name": "new_shape_user", "name": "New Shape"},
+                    # legacy keeps everything else but no longer carries
+                    # the handle or display name.
+                    "legacy": {
+                        "followers_count": 12345,
+                        "friends_count": 678,
+                        "verified": False,
+                    },
+                }
+            }
+        },
+        "legacy": {
+            "id_str": "9999",
+            "full_text": "core-block tweet",
+            "created_at": "Sun Nov 09 11:05:17 +0000 2025",
+            "lang": "en",
+        },
+    }
+
+    tweet = parse_tweet(tweet_data)
+
+    assert tweet is not None
+    assert tweet.user.screen_name == "new_shape_user"
+    assert tweet.user.name == "New Shape"
+    # followers_count is still in legacy in the new shape, which the parser
+    # also has to keep handling correctly.
+    assert tweet.user.followers_count == 12345

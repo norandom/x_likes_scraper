@@ -71,14 +71,17 @@ def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
         core = tweet_data.get("core", {})
         user_results = core.get("user_results", {}).get("result", {})
         user_legacy = user_results.get("legacy", {})
+        # X moved screen_name and name from legacy to a new "core" sub-block.
+        # Read core first, fall back to legacy so old fixtures still parse.
+        user_core = user_results.get("core", {})
 
         # Parse user
         user = User(
             id=user_results.get("rest_id", ""),
-            screen_name=user_legacy.get("screen_name", ""),
-            name=user_legacy.get("name", ""),
+            screen_name=user_core.get("screen_name") or user_legacy.get("screen_name", ""),
+            name=user_core.get("name") or user_legacy.get("name", ""),
             profile_image_url=user_legacy.get("profile_image_url_https", ""),
-            verified=user_legacy.get("verified", False),
+            verified=user_legacy.get("verified", user_results.get("is_blue_verified", False)),
             followers_count=user_legacy.get("followers_count", 0),
             following_count=user_legacy.get("friends_count", 0)
         )
