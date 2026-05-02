@@ -88,6 +88,84 @@ def _tweet_url(tweet: Any) -> str:
 # ---------------------------------------------------------------------------
 # search_likes
 
+def _validate_query(query: Any) -> str:
+    """Strip and validate the query string. Returns the cleaned string."""
+    if not isinstance(query, str):
+        raise errors.invalid_input("query", "must be a string")
+    stripped = query.strip()
+    if not stripped:
+        raise errors.invalid_input("query", "must be non-empty")
+    return stripped
+
+
+def _validate_filter(
+    year: Any,
+    month_start: Any,
+    month_end: Any,
+) -> None:
+    """Validate the structured-filter shape. Raises ``invalid_input`` on any
+    rule violation; returns nothing on success.
+
+    The resolver enforces these rules too. We check here so the error message
+    keeps "filter" as the field name even when the caller hands us a mock
+    that bypasses the resolver.
+    """
+    if year is not None:
+        if isinstance(year, bool) or not isinstance(year, int):
+            raise errors.invalid_input("filter", "year must be an integer")
+        if year < _YEAR_MIN or year > _YEAR_MAX:
+            raise errors.invalid_input(
+                "filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}"
+            )
+
+    if month_start is not None and (
+        not isinstance(month_start, str) or not _MONTH_RE.match(month_start)
+    ):
+        raise errors.invalid_input(
+            "filter", "month_start must match ^(0[1-9]|1[0-2])$"
+        )
+
+    if month_end is not None and (
+        not isinstance(month_end, str) or not _MONTH_RE.match(month_end)
+    ):
+        raise errors.invalid_input(
+            "filter", "month_end must match ^(0[1-9]|1[0-2])$"
+        )
+
+    if month_start is not None and year is None:
+        raise errors.invalid_input("filter", "month_start requires year")
+    if month_end is not None and month_start is None:
+        raise errors.invalid_input("filter", "month_end requires month_start")
+
+
+def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
+    """Convert a ``ScoredHit`` plus the loaded tweet/tree to the dict shape
+    the MCP client receives."""
+    tweet = index.tweets_by_id.get(hit.tweet_id)
+    node = index.tree.nodes_by_id.get(hit.tweet_id)
+
+    if tweet is not None:
+        handle = tweet.user.screen_name if tweet.user is not None else ""
+        snippet = _truncate(tweet.text or "", _SNIPPET_MAX_CHARS)
+    elif node is not None:
+        handle = node.handle
+        snippet = _truncate(node.text or "", _SNIPPET_MAX_CHARS)
+    else:
+        handle = ""
+        snippet = ""
+
+    return {
+        "tweet_id": hit.tweet_id,
+        "year_month": _resolve_year_month(index, hit.tweet_id),
+        "handle": handle,
+        "snippet": snippet,
+        "score": hit.score,
+        "walker_relevance": hit.walker_relevance,
+        "why": hit.why,
+        "feature_breakdown": dict(hit.feature_breakdown),
+    }
+
+
 def search_likes(
     index: TweetIndex,
     query: str,
@@ -97,59 +175,19 @@ def search_likes(
 ) -> list[dict[str, Any]]:
     """Return up to N ranked search hits for ``query``.
 
-    Validates ``query`` (non-empty after strip) and the structured filter
-    shape (``year`` integer in range, ``month_start``/``month_end`` matching
-    ``^(0[1-9]|1[0-2])$``). Translates resolver ``ValueError``s into
-    ``invalid_input`` and any non-``ToolError`` exception (notably
-    :class:`x_likes_mcp.walker.WalkerError`) into ``upstream_failure``.
+    Validates ``query`` and the structured filter; translates resolver
+    ``ValueError``\\ s to ``invalid_input`` and any non-``ToolError``
+    exception (notably :class:`x_likes_mcp.walker.WalkerError`) to
+    ``upstream_failure``.
 
     Returns:
         List of dicts shaped
         ``{"tweet_id", "year_month", "handle", "snippet", "score",
         "walker_relevance", "why", "feature_breakdown"}``.
     """
-    # 1. Validate query.
-    if not isinstance(query, str):
-        raise errors.invalid_input("query", "must be a string")
-    stripped = query.strip()
-    if not stripped:
-        raise errors.invalid_input("query", "must be non-empty")
+    stripped = _validate_query(query)
+    _validate_filter(year, month_start, month_end)
 
-    # 2. Validate filter shape (before calling the resolver). The resolver
-    #    catches deeper rule violations (range, missing year), but we check
-    #    pattern shape here so the field name in the error message is
-    #    accurate.
-    if year is not None:
-        if isinstance(year, bool) or not isinstance(year, int):
-            raise errors.invalid_input("filter", "year must be an integer")
-        if year < _YEAR_MIN or year > _YEAR_MAX:
-            raise errors.invalid_input(
-                "filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}"
-            )
-
-    if month_start is not None:
-        if not isinstance(month_start, str) or not _MONTH_RE.match(month_start):
-            raise errors.invalid_input(
-                "filter", "month_start must match ^(0[1-9]|1[0-2])$"
-            )
-
-    if month_end is not None:
-        if not isinstance(month_end, str) or not _MONTH_RE.match(month_end):
-            raise errors.invalid_input(
-                "filter", "month_end must match ^(0[1-9]|1[0-2])$"
-            )
-
-    # Cross-field shape rules. The resolver enforces these too, but checking
-    # here keeps the field name accurate when the caller wires us up to a
-    # mock that does not run the resolver.
-    if month_start is not None and year is None:
-        raise errors.invalid_input("filter", "month_start requires year")
-    if month_end is not None and month_start is None:
-        raise errors.invalid_input("filter", "month_end requires month_start")
-
-    # 3. Call into the index. Resolver ValueErrors -> invalid_input("filter").
-    #    Anything else (e.g. WalkerError) -> upstream_failure. ToolError that
-    #    somehow escapes propagates unchanged.
     try:
         scored = index.search(stripped, year, month_start, month_end)
     except errors.ToolError:
@@ -159,35 +197,7 @@ def search_likes(
     except Exception as exc:  # noqa: BLE001 — boundary translation is the point
         raise errors.upstream_failure(str(exc)) from exc
 
-    # 4. Shape the response. Limit to the documented top-N.
-    out: list[dict[str, Any]] = []
-    for hit in scored[:_DEFAULT_TOP_N]:
-        tweet = index.tweets_by_id.get(hit.tweet_id)
-        node = index.tree.nodes_by_id.get(hit.tweet_id)
-
-        if tweet is not None:
-            handle = tweet.user.screen_name if tweet.user is not None else ""
-            snippet = _truncate(tweet.text or "", _SNIPPET_MAX_CHARS)
-        elif node is not None:
-            handle = node.handle
-            snippet = _truncate(node.text or "", _SNIPPET_MAX_CHARS)
-        else:
-            handle = ""
-            snippet = ""
-
-        out.append(
-            {
-                "tweet_id": hit.tweet_id,
-                "year_month": _resolve_year_month(index, hit.tweet_id),
-                "handle": handle,
-                "snippet": snippet,
-                "score": hit.score,
-                "walker_relevance": hit.walker_relevance,
-                "why": hit.why,
-                "feature_breakdown": dict(hit.feature_breakdown),
-            }
-        )
-    return out
+    return [_shape_hit(index, hit) for hit in scored[:_DEFAULT_TOP_N]]
 
 
 # ---------------------------------------------------------------------------

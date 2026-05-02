@@ -90,15 +90,9 @@ def _current_year() -> int:
     return datetime.now(timezone.utc).year
 
 
-def _build_tool_definitions() -> list[mcp_types.Tool]:
-    """Return the four tool definitions with input/output JSON schemas.
-
-    The ``year`` upper bound is the current year at server-startup time
-    (Requirement 6.8). The patterns match the spec exactly.
-    """
-    year_max = _current_year()
-
-    search_input_schema: dict[str, Any] = {
+def _search_likes_tool(year_max: int) -> mcp_types.Tool:
+    """Tool definition for ``search_likes``."""
+    input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "query": {
@@ -126,38 +120,46 @@ def _build_tool_definitions() -> list[mcp_types.Tool]:
         "required": ["query"],
         "additionalProperties": False,
     }
-
-    search_output_schema: dict[str, Any] = {
+    output_schema: dict[str, Any] = {
         "type": "object",
-        "properties": {
-            "results": {
-                "type": "array",
-                "items": _SEARCH_HIT_SCHEMA,
-            },
-        },
+        "properties": {"results": {"type": "array", "items": _SEARCH_HIT_SCHEMA}},
         "required": ["results"],
         "additionalProperties": False,
     }
+    return mcp_types.Tool(
+        name="search_likes",
+        description=(
+            "Search the user's liked tweets by natural-language query. "
+            "Optional year/month_start/month_end pre-filter narrows the "
+            "set of months the walker LLM looks at."
+        ),
+        inputSchema=input_schema,
+        outputSchema=output_schema,
+    )
 
-    list_months_input_schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
 
-    list_months_output_schema: dict[str, Any] = {
+def _list_months_tool() -> mcp_types.Tool:
+    """Tool definition for ``list_months``."""
+    output_schema: dict[str, Any] = {
         "type": "object",
-        "properties": {
-            "months": {
-                "type": "array",
-                "items": _MONTH_INFO_SCHEMA,
-            },
-        },
+        "properties": {"months": {"type": "array", "items": _MONTH_INFO_SCHEMA}},
         "required": ["months"],
         "additionalProperties": False,
     }
+    return mcp_types.Tool(
+        name="list_months",
+        description=(
+            "List the months for which per-month Markdown exists, "
+            "reverse-chronologically, with tweet counts when available."
+        ),
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
+        outputSchema=output_schema,
+    )
 
-    get_month_input_schema: dict[str, Any] = {
+
+def _get_month_tool() -> mcp_types.Tool:
+    """Tool definition for ``get_month``."""
+    input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "year_month": {
@@ -169,17 +171,23 @@ def _build_tool_definitions() -> list[mcp_types.Tool]:
         "required": ["year_month"],
         "additionalProperties": False,
     }
-
-    get_month_output_schema: dict[str, Any] = {
+    output_schema: dict[str, Any] = {
         "type": "object",
-        "properties": {
-            "markdown": {"type": "string"},
-        },
+        "properties": {"markdown": {"type": "string"}},
         "required": ["markdown"],
         "additionalProperties": False,
     }
+    return mcp_types.Tool(
+        name="get_month",
+        description="Return the raw per-month Markdown for one YYYY-MM.",
+        inputSchema=input_schema,
+        outputSchema=output_schema,
+    )
 
-    read_tweet_input_schema: dict[str, Any] = {
+
+def _read_tweet_tool() -> mcp_types.Tool:
+    """Tool definition for ``read_tweet``."""
+    input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "tweet_id": {
@@ -191,39 +199,26 @@ def _build_tool_definitions() -> list[mcp_types.Tool]:
         "required": ["tweet_id"],
         "additionalProperties": False,
     }
+    return mcp_types.Tool(
+        name="read_tweet",
+        description="Return metadata for one tweet by numeric id.",
+        inputSchema=input_schema,
+        outputSchema=_TWEET_METADATA_SCHEMA,
+    )
 
+
+def _build_tool_definitions() -> list[mcp_types.Tool]:
+    """Return the four tool definitions with input/output JSON schemas.
+
+    The ``year`` upper bound is the current year at server-startup time
+    (Requirement 6.8). The patterns match the spec exactly.
+    """
+    year_max = _current_year()
     return [
-        mcp_types.Tool(
-            name="search_likes",
-            description=(
-                "Search the user's liked tweets by natural-language query. "
-                "Optional year/month_start/month_end pre-filter narrows the "
-                "set of months the walker LLM looks at."
-            ),
-            inputSchema=search_input_schema,
-            outputSchema=search_output_schema,
-        ),
-        mcp_types.Tool(
-            name="list_months",
-            description=(
-                "List the months for which per-month Markdown exists, "
-                "reverse-chronologically, with tweet counts when available."
-            ),
-            inputSchema=list_months_input_schema,
-            outputSchema=list_months_output_schema,
-        ),
-        mcp_types.Tool(
-            name="get_month",
-            description="Return the raw per-month Markdown for one YYYY-MM.",
-            inputSchema=get_month_input_schema,
-            outputSchema=get_month_output_schema,
-        ),
-        mcp_types.Tool(
-            name="read_tweet",
-            description="Return metadata for one tweet by numeric id.",
-            inputSchema=read_tweet_input_schema,
-            outputSchema=_TWEET_METADATA_SCHEMA,
-        ),
+        _search_likes_tool(year_max),
+        _list_months_tool(),
+        _get_month_tool(),
+        _read_tweet_tool(),
     ]
 
 
