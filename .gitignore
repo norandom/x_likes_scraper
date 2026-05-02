@@ -78,3 +78,6 @@ htmlcov/
 
 # Cookies (important - don't commit your cookies!)
 cookies.json
+
+# Claude Code project MCP config — contains user-specific absolute paths
+.mcp.json

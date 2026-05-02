@@ -164,7 +164,9 @@ RANKER_RECENCY_HALFLIFE_DAYS=180
 
 ### Registering with Claude Code
 
-Project-scoped `.mcp.json`:
+`uv run x-likes-mcp` resolves `pyproject.toml`, `.venv/`, and `.env` from the current working directory, so the MCP config has to either set that directory explicitly or be invoked from the project root. Two shapes:
+
+**Project-scoped** (`.mcp.json` at the project root, only active when Claude Code opens this directory):
 
 ```json
 {
@@ -177,10 +179,31 @@ Project-scoped `.mcp.json`:
 }
 ```
 
-Or with the CLI:
+**Globally available** (your user-scoped `~/.claude.json`, or `.mcp.json` here with an absolute path):
+
+```json
+{
+  "mcpServers": {
+    "x-likes": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/absolute/path/to/x_likes_exporter_py",
+        "x-likes-mcp"
+      ]
+    }
+  }
+}
+```
+
+`uv run --directory <path>` makes uv resolve the project from `<path>` regardless of where Claude Code launches the process. `.mcp.json` with an absolute path is gitignored in this repo because the path is user-specific.
+
+Or use the CLI for user-scope registration:
 
 ```bash
-claude mcp add x-likes -- uv run x-likes-mcp
+claude mcp add x-likes --scope user -- \
+  uv run --directory /absolute/path/to/x_likes_exporter_py x-likes-mcp
 ```
 
 The first run builds a tree cache at `output/tweet_tree_cache.pkl` (mtime-invalidated against the per-month files). Subsequent starts are instant.
