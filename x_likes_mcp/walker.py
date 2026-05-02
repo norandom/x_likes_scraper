@@ -299,6 +299,16 @@ def walk(
     if not months:
         return []
 
+    # The walker config is opt-in; the default search path doesn't need
+    # it. Surface a clear error here rather than letting the OpenAI SDK
+    # fail with a less specific message.
+    if not config.openai_base_url or not config.openai_model:
+        raise WalkerError(
+            "Walker invoked but OPENAI_BASE_URL and/or OPENAI_MODEL are not "
+            "set. The walker explainer is opt-in via search_likes(with_why=true); "
+            "set both variables in .env to enable it."
+        )
+
     # The SDK reads OPENAI_BASE_URL from os.environ; config.load_config wrote
     # it there. We pass api_key explicitly because local OpenAI-compatible
     # proxies often don't require auth (the config allows an empty key), but

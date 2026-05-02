@@ -55,46 +55,46 @@ def test_load_config_minimal_env_returns_populated_config(
     assert config.ranker_weights.recency_halflife_days == 180.0
 
 
-def test_load_config_missing_openai_base_url_raises(
+def test_load_config_missing_openai_vars_resolves_to_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``OPENAI_BASE_URL`` absent → ``ConfigError`` naming the variable."""
+    """Walker config is opt-in: missing ``OPENAI_BASE_URL`` / ``OPENAI_MODEL``
+    resolves to ``None`` rather than raising. The walker itself surfaces a
+    ``WalkerError`` if invoked without these set."""
 
     monkeypatch.setattr(os, "environ", dict(os.environ))
 
-    with pytest.raises(ConfigError) as excinfo:
-        load_config(env={"OPENAI_MODEL": "m"})
-    assert "OPENAI_BASE_URL" in str(excinfo.value)
+    config = load_config(env={})
+    assert config.openai_base_url is None
+    assert config.openai_model is None
+    assert config.openai_api_key == ""
 
 
-def test_load_config_missing_openai_model_raises(
+def test_load_config_writes_openai_base_url_into_environ_when_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``OPENAI_MODEL`` absent → ``ConfigError`` naming the variable."""
-
-    monkeypatch.setattr(os, "environ", dict(os.environ))
-
-    with pytest.raises(ConfigError) as excinfo:
-        load_config(env={"OPENAI_BASE_URL": "x"})
-    assert "OPENAI_MODEL" in str(excinfo.value)
-
-
-def test_load_config_writes_openai_base_url_into_environ(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Successful load mirrors ``OPENAI_BASE_URL`` into ``os.environ``.
-
-    The OpenAI SDK that ``walker.py`` constructs reads
-    ``OPENAI_BASE_URL`` from the process environment; the loader writes
-    the configured value there as a documented side effect. The
-    ``monkeypatch.setattr`` snapshot rolls the write back at teardown so
-    it does not leak into other tests in the session.
-    """
+    """When the walker variables are set, the loader mirrors
+    ``OPENAI_BASE_URL`` into ``os.environ`` as a documented side effect
+    so the OpenAI SDK that ``walker.py`` constructs picks it up at
+    client-construction time. ``monkeypatch.setattr`` rolls the write
+    back at teardown."""
 
     monkeypatch.setattr(os, "environ", dict(os.environ))
 
     load_config(env={"OPENAI_BASE_URL": "http://x.example/v1", "OPENAI_MODEL": "m"})
     assert os.environ["OPENAI_BASE_URL"] == "http://x.example/v1"
+
+
+def test_load_config_skips_environ_write_when_walker_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No walker config → no ``OPENAI_BASE_URL`` write into ``os.environ``."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    os.environ.pop("OPENAI_BASE_URL", None)
+
+    load_config(env={})
+    assert "OPENAI_BASE_URL" not in os.environ
 
 
 def test_load_config_ranker_w_affinity_override(

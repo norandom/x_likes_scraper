@@ -362,6 +362,30 @@ def test_walk_chunk_size_one_calls_helper_per_node(
     assert call_count == 2
 
 
+def test_walk_raises_walker_error_when_openai_config_missing() -> None:
+    """The walker is opt-in; if it's invoked without OPENAI_BASE_URL or
+    OPENAI_MODEL set, surface a clear WalkerError naming the cause."""
+
+    tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
+    config = Config(
+        output_dir=Path("/tmp/walker-test"),
+        by_month_dir=Path("/tmp/walker-test/by_month"),
+        likes_json=Path("/tmp/walker-test/likes.json"),
+        cache_path=Path("/tmp/walker-test/tweet_tree_cache.pkl"),
+        openai_base_url=None,
+        openai_api_key="",
+        openai_model=None,
+        ranker_weights=RankerWeights(),
+    )
+
+    with pytest.raises(WalkerError) as excinfo:
+        walk(tree, "q", ["2025-01"], config)
+    msg = str(excinfo.value)
+    assert "OPENAI_BASE_URL" in msg
+    assert "OPENAI_MODEL" in msg
+    assert "with_why" in msg
+
+
 # ---------------------------------------------------------------------------
 # Regression: walker preservation (task 5.7, requirements 11.1-11.3)
 #

@@ -1,19 +1,22 @@
 """Configuration loader for the X Likes MCP server.
 
-Reads the OpenAI/walker variables (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``,
-``OPENAI_MODEL``), the OpenRouter/embedding variables
-(``OPENROUTER_API_KEY``, ``OPENROUTER_BASE_URL``, ``EMBEDDING_MODEL``), and
-an optional ``OUTPUT_DIR`` from a ``.env`` file in the current working
-directory or, failing that, from ``os.environ``. The loader returns a
-frozen :class:`Config` dataclass and writes ``OPENAI_BASE_URL`` (and
-``OPENAI_API_KEY`` when set) into ``os.environ`` so the OpenAI SDK that
-PageIndex constructs internally picks the values up at client-construction
-time.
+Reads optional ``OUTPUT_DIR``, the OpenRouter/embedding variables
+(``OPENROUTER_API_KEY``, ``OPENROUTER_BASE_URL``, ``EMBEDDING_MODEL``),
+and the optional walker/chat variables (``OPENAI_BASE_URL``,
+``OPENAI_API_KEY``, ``OPENAI_MODEL``) from a ``.env`` file in the current
+working directory or, failing that, from ``os.environ``. The loader
+returns a frozen :class:`Config` dataclass and, when the walker variables
+are present, writes ``OPENAI_BASE_URL`` (and ``OPENAI_API_KEY`` when set)
+into ``os.environ`` so the OpenAI SDK that the walker constructs
+internally picks the values up at client-construction time.
 
-The OpenRouter API key is intentionally allowed to be missing at config-
-load time: the dense-retrieval path surfaces that failure later, at
-index-build time, so the rest of the server (including the walker and the
-config tests) does not require an OpenRouter key to function.
+Both the OpenRouter API key and the walker variables are allowed to be
+missing at config-load time. The dense-retrieval path surfaces a missing
+``OPENROUTER_API_KEY`` later, at index-build time. The walker surfaces
+missing ``OPENAI_BASE_URL`` / ``OPENAI_MODEL`` only when ``walker.walk``
+is actually invoked (search_likes called with ``with_why=true``). This
+keeps the default-path server starting cleanly with just an OpenRouter
+key set.
 
 Stdlib only; no ``python-dotenv`` dependency.
 """
@@ -66,10 +69,10 @@ class Config:
     by_month_dir: Path
     likes_json: Path
     cache_path: Path
-    openai_base_url: str
-    openai_api_key: str
-    openai_model: str
     ranker_weights: RankerWeights
+    openai_base_url: str | None = None
+    openai_api_key: str = ""
+    openai_model: str | None = None
     openrouter_api_key: str | None = None
     openrouter_base_url: str = DEFAULT_OPENROUTER_BASE_URL
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
@@ -143,14 +146,14 @@ def load_config(
         A populated :class:`Config`.
 
     Raises:
-        ConfigError: If ``OPENAI_BASE_URL`` or ``OPENAI_MODEL`` is missing or
-            empty.
+        ConfigError: If a ``RANKER_W_*`` variable is set to a non-numeric
+            value.
     """
 
     resolved = _resolve_env(env_path, env)
 
-    openai_base_url = _require(resolved, "OPENAI_BASE_URL")
-    openai_model = _require(resolved, "OPENAI_MODEL")
+    openai_base_url = resolved.get("OPENAI_BASE_URL", "") or None
+    openai_model = resolved.get("OPENAI_MODEL", "") or None
     openai_api_key = resolved.get("OPENAI_API_KEY", "") or ""
 
     # OpenRouter / embedding configuration. The URL and model fall back to
@@ -174,8 +177,10 @@ def load_config(
 
     # Side effect: hand off the OpenAI base URL (and API key, when set) to
     # ``os.environ`` so the OpenAI SDK in walker.py picks them up at
-    # client-construction time.
-    os.environ["OPENAI_BASE_URL"] = openai_base_url
+    # client-construction time. Skip when the walker is not configured —
+    # the walker surfaces its own error if invoked without these.
+    if openai_base_url:
+        os.environ["OPENAI_BASE_URL"] = openai_base_url
     if openai_api_key:
         os.environ["OPENAI_API_KEY"] = openai_api_key
 
