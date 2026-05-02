@@ -1207,8 +1207,10 @@ def test_open_or_build_corpus_uses_text_or_empty_string(
 
     result = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
 
-    # Ordered by sorted ids: a, b, c, d. None -> "".
-    assert received_texts == ["hello", "", "world", ""]
+    # Ordered by sorted ids: a, b, c, d. None -> "" by the orchestrator,
+    # then "" -> "[empty tweet]" by embed_corpus' empty-string coercion
+    # (some embedding endpoints reject empty strings).
+    assert received_texts == ["hello", "[empty tweet]", "world", "[empty tweet]"]
     assert result.matrix.shape == (4, 4)
     assert result.ordered_ids == ["a", "b", "c", "d"]
 
@@ -1238,3 +1240,62 @@ def test_open_or_build_corpus_persists_after_build(
     assert loaded.ordered_ids == built.ordered_ids
     assert loaded.model_name == "persist-model"
     assert np.array_equal(loaded.matrix, built.matrix)
+
+
+def test_embed_corpus_substitutes_placeholder_for_empty_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty input strings must reach the seam as ``[empty tweet]``.
+
+    Some embedding endpoints reject (or silently empty-out) batches
+    containing empty strings; the coercion in ``embed_corpus`` keeps
+    every input non-empty without breaking row alignment. Tweets with
+    no text still get a stable vector; downstream cosine just scores
+    them lower.
+    """
+
+    embedder = _make_embedder()
+
+    received: list[list[str]] = []
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        received.append(list(texts))
+        return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    embedder.embed_corpus(
+        ordered_ids=["a", "b", "c"],
+        texts=["real text", "", "another"],
+    )
+
+    assert received == [["real text", emb._EMPTY_TEXT_PLACEHOLDER, "another"]]
+
+
+def test_call_embeddings_api_wraps_value_error_as_embedding_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OpenAI SDK raises ``ValueError("No embedding data received")``
+    when the upstream returns 200 with empty ``data``. Surface this as
+    an ``EmbeddingError`` naming the model rather than letting the raw
+    SDK error escape."""
+
+    embedder = _make_embedder(model_name="some/model")
+
+    class _StubClient:
+        class embeddings:
+            @staticmethod
+            def create(model: str, input: list[str]):
+                raise ValueError("No embedding data received")
+
+    embedder._client = _StubClient()
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    with pytest.raises(emb.EmbeddingError) as excinfo:
+        embedder._call_embeddings_api(["one", "two"])
+
+    msg = str(excinfo.value)
+    assert "some/model" in msg
+    assert "empty" in msg.lower()
+    assert "openai/text-embedding-3-small" in msg

@@ -123,7 +123,7 @@ The ranker design is borrowed from `twitter/the-algorithm`'s heavy ranker for th
 
 1. `./scrape.sh` has been run at least once so `output/likes.json` and `output/by_month/` exist.
 2. If you upgraded from an earlier version, re-run `./scrape.sh --no-media --format markdown` once so per-month files reflect the new (h1-less) shape that the indexer expects.
-3. An OpenRouter API key. The dense retrieval path embeds queries (and, on first run, the whole corpus) through OpenRouter's `/v1/embeddings` endpoint. Sign up at [openrouter.ai](https://openrouter.ai); the default model is on the free tier.
+3. An OpenRouter API key. The dense retrieval path embeds queries (and, on first run, the whole corpus) through OpenRouter's `/v1/embeddings` endpoint. Sign up at [openrouter.ai](https://openrouter.ai); the default `EMBEDDING_MODEL` (`openai/text-embedding-3-small`) costs roughly $0.01 for the one-time corpus embed and effectively nothing per query. See "Configuration" below.
 4. Optional: a local OpenAI-Chat-Completions-compatible LLM endpoint, only required when callers pass `with_why=true`. Many local proxies (LiteLLM proxy server, vLLM, llama-cpp-server, Ollama, etc.) expose `/v1/chat/completions`. The walker is the only chat-completions call site and is now opt-in; the default `search_likes` path makes no chat-completions call.
 
 ### Why hosted dense embeddings (and not a local transformer)
@@ -137,10 +137,16 @@ OpenRouter (dense embeddings, required) in `.env`:
 ```ini
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
+EMBEDDING_MODEL=openai/text-embedding-3-small
 ```
 
-`OPENROUTER_API_KEY` is required to start; `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api/v1` (override only if fronted by a different gateway); `EMBEDDING_MODEL` defaults to `nvidia/llama-nemotron-embed-vl-1b-v2:free` (free tier on OpenRouter at the time of writing). Changing the model name rebuilds the embedding cache from scratch.
+`OPENROUTER_API_KEY` is required to start; `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api/v1` (override only if fronted by a different gateway); `EMBEDDING_MODEL` defaults to `openai/text-embedding-3-small`.
+
+Cost: roughly $0.01 to embed a 7,780-tweet corpus once (~400K tokens at $0.02/1M tokens), and effectively free per query thereafter (~50 tokens/query). The on-disk cache means you only pay the corpus cost when the model name changes or new likes are scraped.
+
+Why not a free model: the OpenRouter free tier (e.g. `nvidia/llama-nemotron-embed-vl-1b-v2:free`) requires loosening your account's privacy settings (allow training on prompts), and even then is rate-limited and prone to returning empty responses under load. The paid OpenAI small model trades $0.01 for reliability and privacy; you can override `EMBEDDING_MODEL` if you want the free path back.
+
+Changing the model name rebuilds the embedding cache from scratch.
 
 Walker / chat-completions endpoint (opt-in via `with_why=true`):
 
@@ -233,7 +239,7 @@ The MCP server keeps three on-disk caches under the configured output directory:
 
 Embedding-cache invalidation is structural: rebuild on `EMBEDDING_MODEL` change, on tweet-id-set change (likes added or removed), or on schema-version bump.
 
-First run embeds the entire corpus (~7,780 tweets) via OpenRouter's free tier in roughly 12 minutes (244 batched requests at the free-tier ~20 RPM). Subsequent runs hit the disk cache and start in under a second. The per-query cost on a warm cache is one OpenRouter request (~80-300 ms over LAN/WAN); typical queries return in well under 2 seconds end-to-end.
+First run embeds the entire corpus (~7,780 tweets) through OpenRouter — typically 30-90 seconds with the default paid model (`openai/text-embedding-3-small`). Subsequent runs hit the disk cache and start in under a second. The per-query cost on a warm cache is one OpenRouter request (~80-300 ms over LAN/WAN); typical queries return in well under 2 seconds end-to-end. If you override `EMBEDDING_MODEL` to a free-tier endpoint, expect ~12 minutes for the first build (rate limits) and occasional empty-response retries.
 
 ## Usage examples
 

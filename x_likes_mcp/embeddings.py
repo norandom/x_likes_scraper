@@ -65,6 +65,12 @@ DEFAULT_MAX_RETRIES: int = 3
 CACHE_NPY_NAME: str = "corpus_embeddings.npy"
 CACHE_META_NAME: str = "corpus_embeddings.meta.json"
 
+# Used in :meth:`Embedder.embed_corpus` to substitute for empty/None
+# tweet text. Some embedding endpoints reject (or silently empty-out)
+# batches containing empty strings; this placeholder keeps every input
+# non-empty without breaking row alignment.
+_EMPTY_TEXT_PLACEHOLDER: str = "[empty tweet]"
+
 # Re-exported so callers can ``from x_likes_mcp.embeddings import
 # DEFAULT_EMBEDDING_MODEL`` (the spec lists it in the embeddings.py
 # constants block).
@@ -251,6 +257,18 @@ class Embedder:
                         f"OpenRouter embeddings request failed "
                         f"(status={status}): {exc}"
                     ) from exc
+            except ValueError as exc:
+                # The OpenAI SDK's response parser raises ValueError when
+                # the upstream returns 200 with empty `data`. This is a
+                # provider-side payload-shape problem (common with flaky
+                # free-tier endpoints) and is not retryable. Surface it
+                # with a clear, actionable message.
+                raise EmbeddingError(
+                    f"OpenRouter returned an empty embeddings payload for "
+                    f"model={self.model_name!r} (batch size {len(texts)}): "
+                    f"{exc}. Try a different model (e.g. "
+                    f"openai/text-embedding-3-small)."
+                ) from exc
             else:
                 # Success: sort by .index, return the embedding lists.
                 sorted_data = sorted(
@@ -307,10 +325,17 @@ class Embedder:
             # paths handle the empty case.
             return np.zeros((0, 0), dtype=np.float32)
 
+        # Some embedding endpoints reject (or silently empty-out) batches
+        # that contain empty strings. Substitute a benign placeholder so
+        # every input is non-empty while keeping row alignment intact.
+        # Tweets that genuinely have no text still get a stable vector;
+        # the cosine score is just lower than for tweets with real text.
+        safe_texts = [t if t else _EMPTY_TEXT_PLACEHOLDER for t in texts]
+
         rows: list[list[float]] = []
-        n = len(texts)
+        n = len(safe_texts)
         for batch_start in range(0, n, self.batch_size):
-            batch = texts[batch_start : batch_start + self.batch_size]
+            batch = safe_texts[batch_start : batch_start + self.batch_size]
             batch_rows = self._call_embeddings_api(batch)
             rows.extend(batch_rows)
             # Pace between batches; the final batch does not sleep.

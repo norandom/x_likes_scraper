@@ -32,7 +32,7 @@ from pathlib import Path
 # read from them, and the future ``embeddings.py`` module is expected to
 # import them so a model-name change propagates to one place only.
 DEFAULT_OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-DEFAULT_EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+DEFAULT_EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
 
 
 class ConfigError(Exception):

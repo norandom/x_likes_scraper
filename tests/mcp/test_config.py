@@ -244,7 +244,7 @@ def test_load_config_embedding_model_defaults_when_unset(
     monkeypatch.setattr(os, "environ", dict(os.environ))
 
     config = load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})
-    assert config.embedding_model == "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    assert config.embedding_model == "openai/text-embedding-3-small"
     assert config.embedding_model == DEFAULT_EMBEDDING_MODEL
 
 
@@ -315,4 +315,4 @@ def test_load_config_default_constants_match_field_defaults() -> None:
     """
 
     assert DEFAULT_OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
-    assert DEFAULT_EMBEDDING_MODEL == "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    assert DEFAULT_EMBEDDING_MODEL == "openai/text-embedding-3-small"
