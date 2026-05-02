@@ -108,6 +108,83 @@ exporter.export_all()
 
 Exporting tens of thousands of likes can take hours, and the run will eventually hit a network blip or a rate-limit wait. The exporter writes progress to `.export_checkpoint.json` and `.export_tweets.pkl` in the output directory as it goes. Pass `--resume` on the CLI (or `resume=True` in Python) to pick up where it stopped. The checkpoint holds the tweets fetched so far and the current pagination cursor; on resume the exporter merges new tweets with the saved set and deduplicates by ID. The checkpoint files are deleted automatically once an export finishes.
 
+## MCP Server
+
+`python -m x_likes_mcp` (or `uv run x-likes-mcp`) starts a stdio MCP server that exposes the like history through four tools:
+
+- `search_likes(query, year, month_start, month_end)` — natural-language search ranked with a heavy-ranker-shape formula inspired by `twitter/the-algorithm`. The optional `year`/`month_start`/`month_end` pre-filter scopes which months the LLM walks (faster than open-ended searches).
+- `list_months()` — months for which per-month Markdown exists, reverse-chronologically.
+- `get_month(year_month)` — raw Markdown for one month.
+- `read_tweet(tweet_id)` — one tweet's metadata by id.
+
+### Prerequisites
+
+1. `./scrape.sh` has been run at least once so `output/likes.json` and `output/by_month/` exist.
+2. If you upgraded from an earlier version, re-run `./scrape.sh --no-media --format markdown` once so per-month files reflect the new (h1-less) shape that the indexer expects.
+3. A local OpenAI-Chat-Completions-compatible LLM endpoint. Many local proxies (LiteLLM proxy server, vLLM, llama-cpp-server, Ollama, etc.) expose `/v1/chat/completions`.
+
+### Configuration
+
+Three new variables in `.env`:
+
+```ini
+OPENAI_BASE_URL=http://10.0.0.59:8317/v1
+OPENAI_API_KEY=sk-dummy
+OPENAI_MODEL=claude-opus-4-1-20250805
+```
+
+The `openai` Python SDK reads `OPENAI_BASE_URL` from the process environment at client-construction time, so any OpenAI-compatible endpoint works. The model string is what the endpoint expects (e.g. an Anthropic model name if the proxy maps OpenAI requests onto an Anthropic backend).
+
+Optional ranker weights (override the in-code defaults):
+
+```ini
+# Final score for a candidate tweet:
+#   score = walker_relevance * W_RELEVANCE
+#         + log1p(favorite_count) * W_FAVORITE
+#         + log1p(retweet_count)  * W_RETWEET
+#         + log1p(reply_count)    * W_REPLY
+#         + log1p(view_count)     * W_VIEW
+#         + author_affinity[handle] * W_AFFINITY
+#         + recency_decay(created_at, anchor) * W_RECENCY
+#         + verified_flag * W_VERIFIED
+#         + has_media_flag * W_MEDIA
+RANKER_W_RELEVANCE=10.0
+RANKER_W_FAVORITE=2.0
+RANKER_W_RETWEET=2.5
+RANKER_W_REPLY=1.0
+RANKER_W_VIEW=0.5
+RANKER_W_AFFINITY=3.0
+RANKER_W_RECENCY=1.5
+RANKER_W_VERIFIED=0.5
+RANKER_W_MEDIA=0.3
+RANKER_RECENCY_HALFLIFE_DAYS=180
+```
+
+`author_affinity[handle]` is precomputed from the user's own like history as `log1p(count_of_likes_from_handle)`. It captures who you keep returning to.
+
+### Registering with Claude Code
+
+Project-scoped `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "x-likes": {
+      "command": "uv",
+      "args": ["run", "x-likes-mcp"]
+    }
+  }
+}
+```
+
+Or with the CLI:
+
+```bash
+claude mcp add x-likes -- uv run x-likes-mcp
+```
+
+The first run builds a tree cache at `output/tweet_tree_cache.pkl` (mtime-invalidated against the per-month files). Subsequent starts are instant.
+
 ## Usage examples
 
 ### Basic export

@@ -345,7 +345,7 @@
   - _Depends: 4.1, 4.2, 6.1_
   - _Boundary: tests/mcp/test_tools.py_
 
-- [ ] 6.8 Write `test_server_integration.py`
+- [x] 6.8 Write `test_server_integration.py`
   - Build the MCP server in-process via `server.build_server(index)` against the fixture export with `walker.walk` mocked
   - Drive each of the four tools through the SDK's tool-call dispatch (programmatic, not stdio) and assert the response shape matches the declared output schema
   - Verify a `ToolError` raised inside a handler becomes an MCP error response with the right category and the server does not propagate the exception
@@ -358,7 +358,7 @@
 
 ## 7. Documentation
 
-- [ ] 7.1 Add MCP Server section to `README.md`
+- [x] 7.1 Add MCP Server section to `README.md`
   - Add a new section after the existing usage section titled "MCP Server"
   - Include `.mcp.json` snippet showing the `command`/`args` shape Claude Code expects (`uv run x-likes-mcp` or `python -m x_likes_mcp`)
   - Include the equivalent `claude mcp add` invocation
@@ -375,7 +375,7 @@
 
 ## 8. Final integration check
 
-- [ ] 8.1 Run the full test suite end-to-end and verify Spec 1's tests still pass alongside this spec's
+- [x] 8.1 Run the full test suite end-to-end and verify Spec 1's tests still pass alongside this spec's
   - Run `pytest` from the repo root and confirm both `tests/` (Spec 1) and `tests/mcp/` collect and pass
   - Run `python -m x_likes_mcp` against the existing `output/` directory with a temp `.env` that has `OPENAI_BASE_URL=http://localhost:1234/v1`, `OPENAI_MODEL=any` (no real server needed; startup ends at the SDK stdio loop, send EOF on stdin to exit cleanly)
   - Verify `cookies.json` is not opened during the test run (rely on the conftest guard)
