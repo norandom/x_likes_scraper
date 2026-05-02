@@ -423,3 +423,234 @@ def test_call_embeddings_api_sorts_response_data_by_index(
     embedder = emb.Embedder(api_key="abc")
     out = embedder._call_embeddings_api(["a", "b", "c"])
     assert out == [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]
+
+
+# ---------------------------------------------------------------------------
+# cosine_top_k (task 2.2)
+#
+# These tests cover the new method added in task 2.2. The dense retrieval
+# path computes cosine similarity as a single matrix-vector dot product on
+# already L2-normalized inputs, then takes the top-k indices (optionally
+# masked to a restricted id set). The test fixtures below build small,
+# hand-normalized corpora so the expected ranking is mechanical.
+
+
+def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """L2-normalize each row; zero rows are left as zero (no NaN)."""
+
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms = np.where(norms == 0.0, 1.0, norms)
+    return (matrix / norms).astype(np.float32, copy=False)
+
+
+def _make_corpus(
+    raw_vectors: list[list[float]],
+    ids: list[str],
+    *,
+    model_name: str = "test-model",
+) -> emb.CorpusEmbeddings:
+    """Build a ``CorpusEmbeddings`` from raw vectors, normalizing per row.
+
+    Tests pass arbitrary integer-valued rows for clarity; this helper does
+    the L2 normalization so the corpus matches the production invariant
+    that ``embed_corpus`` rows are unit length.
+    """
+
+    matrix = np.asarray(raw_vectors, dtype=np.float32)
+    matrix = _normalize_rows(matrix)
+    return emb.CorpusEmbeddings(matrix=matrix, ordered_ids=list(ids), model_name=model_name)
+
+
+def _normalize_vec(vec: list[float]) -> np.ndarray:
+    arr = np.asarray(vec, dtype=np.float32)
+    norm = float(np.linalg.norm(arr))
+    if norm == 0.0:
+        return arr
+    return (arr / norm).astype(np.float32, copy=False)
+
+
+def test_cosine_top_k_descending_order() -> None:
+    # 5 rows in 3-dim space:
+    #   row 0: aligned with query (1,0,0)        -> highest score
+    #   row 1: perpendicular (0,1,0)             -> 0.0
+    #   row 2: perpendicular (0,0,1)             -> 0.0
+    #   row 3: anti-aligned (-1,0,0)             -> -1.0
+    #   row 4: anti-aligned variant (-1,-1,0)    -> < 0
+    embedder = _make_embedder()
+    corpus = _make_corpus(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [-1.0, -1.0, 0.0],
+        ],
+        ["a", "b", "c", "d", "e"],
+    )
+    query = _normalize_vec([1.0, 0.0, 0.0])
+
+    result = embedder.cosine_top_k(query, corpus, k=5)
+
+    assert isinstance(result, list)
+    assert len(result) == 5
+    # Top entry is the aligned row.
+    assert result[0][0] == "a"
+    np.testing.assert_allclose(result[0][1], 1.0, atol=1e-5)
+    # Scores are descending.
+    scores = [score for _, score in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_cosine_top_k_returns_at_most_k() -> None:
+    embedder = _make_embedder()
+    # 10 rows; use varied alignments with the query (1,0).
+    raw = [[float(10 - i), 0.0] for i in range(10)]  # decreasing alignment
+    ids = [f"id_{i}" for i in range(10)]
+    corpus = _make_corpus(raw, ids)
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(query, corpus, k=3)
+
+    assert len(result) == 3
+    # The top three by alignment are id_0, id_1, id_2 (largest x components).
+    returned_ids = [tid for tid, _ in result]
+    assert returned_ids == ["id_0", "id_1", "id_2"]
+
+
+def test_cosine_top_k_default_k_is_200() -> None:
+    """When ``k`` is unspecified, the default top-K (200) is used.
+
+    With a 5-row corpus and the default k=200, every row is returned
+    (count is min(k, N)), and DEFAULT_TOP_K must be 200.
+    """
+
+    assert emb.DEFAULT_TOP_K == 200
+
+    embedder = _make_embedder()
+    corpus = _make_corpus(
+        [[1.0, 0.0], [0.5, 0.5], [0.0, 1.0], [-0.5, 0.5], [-1.0, 0.0]],
+        ["a", "b", "c", "d", "e"],
+    )
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(query, corpus)  # k omitted -> default 200
+
+    # Default k=200 with N=5 returns all 5 rows.
+    assert len(result) == 5
+
+
+def test_cosine_top_k_with_restrict_returns_only_restricted_ids() -> None:
+    embedder = _make_embedder()
+    # 10 rows where id_5 has the strongest alignment with query (1,0).
+    raw = [[1.0, 0.0]] * 10
+    # Make id_5 stand out before normalization is irrelevant — they all
+    # normalize to (1,0). To break ties deterministically, vary x slightly.
+    raw = [
+        [1.0, 0.1],  # id_0
+        [1.0, 0.2],  # id_1
+        [1.0, 0.3],  # id_2
+        [1.0, 0.4],  # id_3
+        [1.0, 0.5],  # id_4
+        [10.0, 0.0],  # id_5  -> after normalize (1,0), best alignment with (1,0)
+        [1.0, 0.6],  # id_6
+        [1.0, 0.7],  # id_7
+        [1.0, 0.8],  # id_8
+        [1.0, 0.9],  # id_9
+    ]
+    ids = [f"id_{i}" for i in range(10)]
+    corpus = _make_corpus(raw, ids)
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(
+        query, corpus, k=200, restrict_to_ids={"id_2", "id_8"}
+    )
+
+    assert len(result) == 2
+    returned_ids = {tid for tid, _ in result}
+    assert returned_ids == {"id_2", "id_8"}
+    # Scores are descending.
+    scores = [score for _, score in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_cosine_top_k_with_restrict_smaller_than_k_returns_all() -> None:
+    embedder = _make_embedder()
+    raw = [[float(i + 1), 0.0] for i in range(10)]
+    ids = [f"id_{i}" for i in range(10)]
+    corpus = _make_corpus(raw, ids)
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(
+        query, corpus, k=10, restrict_to_ids={"id_3", "id_7"}
+    )
+
+    # Restricted scope (size 2) is smaller than k (10): return all of it.
+    assert len(result) == 2
+    returned_ids = {tid for tid, _ in result}
+    assert returned_ids == {"id_3", "id_7"}
+
+
+def test_cosine_top_k_with_empty_restrict_returns_empty() -> None:
+    embedder = _make_embedder()
+    corpus = _make_corpus([[1.0, 0.0], [0.0, 1.0]], ["a", "b"])
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(query, corpus, k=5, restrict_to_ids=set())
+
+    assert result == []
+
+
+def test_cosine_top_k_with_restrict_no_matches_returns_empty() -> None:
+    embedder = _make_embedder()
+    corpus = _make_corpus([[1.0, 0.0], [0.0, 1.0]], ["a", "b"])
+    query = _normalize_vec([1.0, 0.0])
+
+    result = embedder.cosine_top_k(
+        query, corpus, k=5, restrict_to_ids={"id_does_not_exist"}
+    )
+
+    assert result == []
+
+
+def test_cosine_top_k_empty_corpus_returns_empty() -> None:
+    embedder = _make_embedder()
+    corpus = emb.CorpusEmbeddings(
+        matrix=np.zeros((0, 0), dtype=np.float32),
+        ordered_ids=[],
+        model_name="x",
+    )
+    # Any query shape is fine; empty corpus short-circuits before the
+    # dim-mismatch check.
+    query = np.zeros((4,), dtype=np.float32)
+
+    result = embedder.cosine_top_k(query, corpus, k=5)
+    assert result == []
+
+
+def test_cosine_top_k_query_dim_mismatch_raises() -> None:
+    embedder = _make_embedder()
+    corpus = _make_corpus(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        ["a", "b"],
+    )
+    bad_query = np.array([1.0, 0.0, 0.0], dtype=np.float32)  # shape (3,)
+
+    with pytest.raises(ValueError) as excinfo:
+        embedder.cosine_top_k(bad_query, corpus, k=2)
+
+    msg = str(excinfo.value)
+    # Error message should name both shapes for actionable diagnostics.
+    assert "(3,)" in msg or "3" in msg
+    assert "4" in msg
+
+
+def test_cosine_top_k_invalid_k_raises() -> None:
+    embedder = _make_embedder()
+    corpus = _make_corpus([[1.0, 0.0], [0.0, 1.0]], ["a", "b"])
+    query = _normalize_vec([1.0, 0.0])
+
+    with pytest.raises(ValueError):
+        embedder.cosine_top_k(query, corpus, k=0)
+
+    with pytest.raises(ValueError):
+        embedder.cosine_top_k(query, corpus, k=-1)

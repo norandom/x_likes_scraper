@@ -28,7 +28,7 @@
   - _Requirements: 1.3, 1.4, 2.3, 10.2_
   - _Boundary: x_likes_mcp/embeddings.py_
 
-- [ ] 2.2 Implement `cosine_top_k` with optional id-set masking
+- [x] 2.2 Implement `cosine_top_k` with optional id-set masking
   - Add `Embedder.cosine_top_k(query_vec, corpus, k=200, restrict_to_ids=None)` to `embeddings.py`.
   - Compute cosine similarity as a single matrix-vector dot product on the already L2-normalized inputs.
   - When `restrict_to_ids` is `None`, take the top-k indices over the whole matrix. When it is provided, gather only the matching rows before taking the top-k; if the restricted scope is smaller than k, return every restricted candidate.

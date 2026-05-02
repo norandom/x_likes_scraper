@@ -311,3 +311,111 @@ class Embedder:
         normalized = (matrix / norms).astype(np.float32, copy=False)
 
         return normalized
+
+    # ------------------------------------------------------------------
+    # Cosine top-K
+
+    def cosine_top_k(
+        self,
+        query_vec: np.ndarray,
+        corpus: CorpusEmbeddings,
+        k: int = DEFAULT_TOP_K,
+        restrict_to_ids: set[str] | None = None,
+    ) -> list[tuple[str, float]]:
+        """Return up to ``k`` ``(tweet_id, cosine_similarity)`` pairs, descending.
+
+        Both ``query_vec`` and ``corpus.matrix`` are expected to be
+        L2-normalized (which :meth:`embed_query` and :meth:`embed_corpus`
+        produce). Cosine similarity reduces to a single matrix-vector dot
+        product on normalized vectors:
+
+            scores = corpus.matrix @ query_vec  # shape (N,)
+
+        When ``restrict_to_ids`` is ``None`` the top-k is taken over the
+        whole matrix. When it is provided, the candidates are first
+        gathered to the rows whose ``ordered_ids[i]`` is in the set; if
+        the restricted scope is smaller than ``k``, every restricted
+        candidate is returned (sorted by score, descending).
+
+        Edge cases:
+            * Empty corpus (``matrix.shape == (0, 0)`` or ``ordered_ids ==
+              []``): return ``[]``.
+            * ``query_vec`` shape mismatch with ``corpus.matrix.shape[1]``:
+              raise :class:`ValueError` naming both shapes.
+            * ``restrict_to_ids`` is the empty set: return ``[]`` (empty
+              restriction means "no candidates", distinct from ``None``).
+            * ``restrict_to_ids`` has no overlap with the corpus: return
+              ``[]``.
+            * ``k <= 0``: raise :class:`ValueError`.
+        """
+
+        if k <= 0:
+            raise ValueError(f"k must be positive (got k={k})")
+
+        # Empty restriction is distinct from None: it means "no candidates".
+        if restrict_to_ids is not None and not restrict_to_ids:
+            return []
+
+        # Empty corpus short-circuits before the dim-mismatch check so that
+        # callers building a placeholder (0, 0) corpus never see a spurious
+        # ValueError on a query that would otherwise be valid.
+        if corpus.matrix.size == 0 or len(corpus.ordered_ids) == 0:
+            return []
+
+        expected_dim = corpus.matrix.shape[1]
+        if query_vec.shape != (expected_dim,):
+            raise ValueError(
+                f"query_vec shape {tuple(query_vec.shape)} does not match "
+                f"corpus.matrix.shape[1] ({expected_dim},); "
+                f"corpus.matrix.shape={tuple(corpus.matrix.shape)}"
+            )
+
+        # Cosine on L2-normalized inputs is a dot product.
+        scores = corpus.matrix @ query_vec  # shape (N,)
+
+        if restrict_to_ids is None:
+            # Whole-corpus top-k.
+            n = scores.shape[0]
+            top_count = min(k, n)
+            if top_count == n:
+                # Take everything; argpartition with kth = n-1 is wasted work.
+                candidate_indices = np.arange(n)
+            else:
+                # argpartition gives an unsorted top_count; sort that slice.
+                candidate_indices = np.argpartition(-scores, kth=top_count - 1)[
+                    :top_count
+                ]
+            # Sort the selected indices by score descending.
+            sorted_local = np.argsort(-scores[candidate_indices])
+            selected = candidate_indices[sorted_local]
+        else:
+            # Restricted-scope top-k. Gather the row indices whose id is in
+            # the restriction set first; then top-k within that scope.
+            restricted_indices = np.array(
+                [
+                    i
+                    for i, tid in enumerate(corpus.ordered_ids)
+                    if tid in restrict_to_ids
+                ],
+                dtype=np.int64,
+            )
+            if restricted_indices.size == 0:
+                return []
+
+            restricted_scores = scores[restricted_indices]
+
+            if restricted_indices.size <= k:
+                # Smaller-than-k restricted scope: return all of it, sorted.
+                sorted_local = np.argsort(-restricted_scores)
+                selected = restricted_indices[sorted_local]
+            else:
+                top_count = k
+                local_top = np.argpartition(
+                    -restricted_scores, kth=top_count - 1
+                )[:top_count]
+                local_sorted = local_top[np.argsort(-restricted_scores[local_top])]
+                selected = restricted_indices[local_sorted]
+
+        return [
+            (corpus.ordered_ids[int(i)], float(scores[int(i)])) for i in selected
+        ]
