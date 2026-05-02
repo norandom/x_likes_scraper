@@ -137,7 +137,7 @@
   - _Depends: 3.1_
   - _Boundary: x_likes_mcp/index.py_
 
-- [ ] 3.3b Implement `walker.py` with `walk`, `WalkerHit`, `WalkerError`
+- [x] 3.3b Implement `walker.py` with `walk`, `WalkerHit`, `WalkerError`
   - Define frozen `WalkerHit` dataclass with `tweet_id: str`, `relevance: float`, `why: str`
   - Define `WalkerError(RuntimeError)`
   - Implement `walk(tree: TweetTree, query: str, months_in_scope: list[str] | None, config: Config, chunk_size: int = 30) -> list[WalkerHit]`:
