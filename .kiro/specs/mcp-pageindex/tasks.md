@@ -153,7 +153,7 @@
   - _Depends: 1.6, 3.2_
   - _Boundary: x_likes_mcp/walker.py_
 
-- [ ] 3.3c Implement `ranker.py` with `rank`, `ScoredHit`, `compute_author_affinity`
+- [x] 3.3c Implement `ranker.py` with `rank`, `ScoredHit`, `compute_author_affinity`
   - Define frozen `ScoredHit` dataclass with `tweet_id: str`, `score: float`, `walker_relevance: float`, `why: str`, `feature_breakdown: dict[str, float]`
   - Implement `compute_author_affinity(tweets: list[Tweet]) -> dict[str, float]`: count occurrences of each `tweet.user.screen_name`, return `{handle: math.log1p(count)}`
   - Implement `rank(walker_hits, tweets_by_id, author_affinity, weights, anchor)`:
