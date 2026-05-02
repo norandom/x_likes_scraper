@@ -1,12 +1,19 @@
 """Configuration loader for the X Likes MCP server.
 
-Reads three environment variables (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``,
-``OPENAI_MODEL``) plus an optional ``OUTPUT_DIR`` from a ``.env`` file in the
-current working directory or, failing that, from ``os.environ``. The loader
-returns a frozen :class:`Config` dataclass and writes ``OPENAI_BASE_URL``
-(and ``OPENAI_API_KEY`` when set) into ``os.environ`` so the OpenAI SDK that
+Reads the OpenAI/walker variables (``OPENAI_BASE_URL``, ``OPENAI_API_KEY``,
+``OPENAI_MODEL``), the OpenRouter/embedding variables
+(``OPENROUTER_API_KEY``, ``OPENROUTER_BASE_URL``, ``EMBEDDING_MODEL``), and
+an optional ``OUTPUT_DIR`` from a ``.env`` file in the current working
+directory or, failing that, from ``os.environ``. The loader returns a
+frozen :class:`Config` dataclass and writes ``OPENAI_BASE_URL`` (and
+``OPENAI_API_KEY`` when set) into ``os.environ`` so the OpenAI SDK that
 PageIndex constructs internally picks the values up at client-construction
 time.
+
+The OpenRouter API key is intentionally allowed to be missing at config-
+load time: the dense-retrieval path surfaces that failure later, at
+index-build time, so the rest of the server (including the walker and the
+config tests) does not require an OpenRouter key to function.
 
 Stdlib only; no ``python-dotenv`` dependency.
 """
@@ -16,6 +23,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+# Module-level defaults for the OpenRouter / embeddings configuration.
+# These constants are the single source of truth: ``Config`` field defaults
+# read from them, and the future ``embeddings.py`` module is expected to
+# import them so a model-name change propagates to one place only.
+DEFAULT_OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+DEFAULT_EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 
 
 class ConfigError(Exception):
@@ -56,6 +70,9 @@ class Config:
     openai_api_key: str
     openai_model: str
     ranker_weights: RankerWeights
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = DEFAULT_OPENROUTER_BASE_URL
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -136,6 +153,19 @@ def load_config(
     openai_model = _require(resolved, "OPENAI_MODEL")
     openai_api_key = resolved.get("OPENAI_API_KEY", "") or ""
 
+    # OpenRouter / embedding configuration. The URL and model fall back to
+    # documented defaults; the API key is allowed to be ``None`` here and is
+    # surfaced as an error later, at index-build time, so a developer can
+    # run the walker (and the config tests) without an OpenRouter key.
+    openrouter_base_url = (
+        resolved.get("OPENROUTER_BASE_URL", "") or DEFAULT_OPENROUTER_BASE_URL
+    )
+    embedding_model = (
+        resolved.get("EMBEDDING_MODEL", "") or DEFAULT_EMBEDDING_MODEL
+    )
+    openrouter_api_key_raw = resolved.get("OPENROUTER_API_KEY", "") or ""
+    openrouter_api_key: str | None = openrouter_api_key_raw or None
+
     output_dir_raw = resolved.get("OUTPUT_DIR", "") or "output"
     output_dir = Path(output_dir_raw)
     by_month_dir = output_dir / "by_month"
@@ -158,6 +188,9 @@ def load_config(
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         ranker_weights=_load_ranker_weights(resolved),
+        openrouter_api_key=openrouter_api_key,
+        openrouter_base_url=openrouter_base_url,
+        embedding_model=embedding_model,
     )
 
 

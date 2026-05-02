@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from x_likes_mcp.config import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_OPENROUTER_BASE_URL,
     Config,
     ConfigError,
     RankerWeights,
@@ -160,3 +162,157 @@ def test_load_config_default_output_dir(
     config = load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})
     assert config.output_dir == Path("output")
     assert config.cache_path == Path("output") / "tweet_tree_cache.pkl"
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter + embedding-model fields (mcp-fast-search spec, Requirement 1)
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_openrouter_fields_populated_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All three new env vars set → ``Config`` fields mirror the env values.
+
+    Covers Requirement 1.1, 1.2, 1.3: ``OPENROUTER_BASE_URL``,
+    ``EMBEDDING_MODEL``, and ``OPENROUTER_API_KEY`` are read from the
+    resolved env dict and stored on ``Config``.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OPENAI_BASE_URL": "x",
+            "OPENAI_MODEL": "m",
+            "OPENROUTER_API_KEY": "sk-or-test-123",
+            "OPENROUTER_BASE_URL": "https://openrouter.example/api/v1",
+            "EMBEDDING_MODEL": "some-org/some-embedding-model:free",
+        }
+    )
+
+    assert config.openrouter_api_key == "sk-or-test-123"
+    assert config.openrouter_base_url == "https://openrouter.example/api/v1"
+    assert config.embedding_model == "some-org/some-embedding-model:free"
+
+
+def test_load_config_openrouter_base_url_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``OPENROUTER_BASE_URL`` unset → falls back to the documented default.
+
+    Covers Requirement 1.1: the default is
+    ``https://openrouter.ai/api/v1``.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})
+    assert config.openrouter_base_url == "https://openrouter.ai/api/v1"
+    assert config.openrouter_base_url == DEFAULT_OPENROUTER_BASE_URL
+
+
+def test_load_config_openrouter_base_url_defaults_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ``OPENROUTER_BASE_URL`` is treated the same as unset.
+
+    Covers Requirement 1.1's "unset or empty" wording.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OPENAI_BASE_URL": "x",
+            "OPENAI_MODEL": "m",
+            "OPENROUTER_BASE_URL": "",
+        }
+    )
+    assert config.openrouter_base_url == DEFAULT_OPENROUTER_BASE_URL
+
+
+def test_load_config_embedding_model_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``EMBEDDING_MODEL`` unset → falls back to the documented default.
+
+    Covers Requirement 1.2: the default is the free-tier vision-language
+    embedding model on OpenRouter.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})
+    assert config.embedding_model == "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    assert config.embedding_model == DEFAULT_EMBEDDING_MODEL
+
+
+def test_load_config_embedding_model_defaults_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ``EMBEDDING_MODEL`` is treated the same as unset.
+
+    Covers Requirement 1.2's "unset or empty" wording.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OPENAI_BASE_URL": "x",
+            "OPENAI_MODEL": "m",
+            "EMBEDDING_MODEL": "",
+        }
+    )
+    assert config.embedding_model == DEFAULT_EMBEDDING_MODEL
+
+
+def test_load_config_openrouter_api_key_is_none_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset ``OPENROUTER_API_KEY`` → ``None`` (not ``""``, not a default).
+
+    Covers Requirement 1.3: missing key resolves to ``None`` at config-
+    load time. The "missing key" failure is surfaced later, at index-
+    build time, so config-only tests do not need to provide a key.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})
+    assert config.openrouter_api_key is None
+
+
+def test_load_config_openrouter_api_key_is_none_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty ``OPENROUTER_API_KEY`` resolves to ``None``, not ``""``.
+
+    Empty strings in ``.env`` files are common (``OPENROUTER_API_KEY=``);
+    they must be normalized to ``None`` so downstream code can do a single
+    ``if api_key is None`` check.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OPENAI_BASE_URL": "x",
+            "OPENAI_MODEL": "m",
+            "OPENROUTER_API_KEY": "",
+        }
+    )
+    assert config.openrouter_api_key is None
+
+
+def test_load_config_default_constants_match_field_defaults() -> None:
+    """The exported default constants match the ``Config`` field defaults.
+
+    A future ``embeddings.py`` will import these constants as the single
+    source of truth; this test guards against drift between the two
+    representations.
+    """
+
+    assert DEFAULT_OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
+    assert DEFAULT_EMBEDDING_MODEL == "nvidia/llama-nemotron-embed-vl-1b-v2:free"

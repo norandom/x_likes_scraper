@@ -9,7 +9,7 @@
   - _Requirements: 1.5, 12.1_
   - _Boundary: pyproject.toml, .env.sample_
 
-- [ ] 1.2 Extend `config.Config` with OpenRouter and embedding-model fields
+- [x] 1.2 Extend `config.Config` with OpenRouter and embedding-model fields
   - Add `openrouter_api_key: str | None = None`, `openrouter_base_url: str = "https://openrouter.ai/api/v1"`, and `embedding_model: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"` to the `Config` dataclass. Use module-level default constants imported from `embeddings.py` (or a shared `_defaults` constant block) so a single source of truth governs both modules.
   - In `load_config`, read `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, and `EMBEDDING_MODEL` from the resolved env dict; empty/unset for the URL and model fall back to defaults; empty/unset for the API key resolves to `None` (surfaced at index-build time, not config-load time, so config tests don't need a key).
   - Update `tests/mcp/test_config.py`: assert each new field is populated from env, that the URL and model fall back to documented defaults, that the API key is `None` when unset, and that the default constants match what `embeddings.py` exports.
