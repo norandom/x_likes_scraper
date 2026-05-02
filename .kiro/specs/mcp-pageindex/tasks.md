@@ -105,7 +105,7 @@
   - _Requirements: 3.1, 3.4, 3.5, 5.7, 9.2, 10.5_
   - _Boundary: x_likes_mcp/index.py_
 
-- [ ] 3.2 Implement `tree.py` with `build_tree`, `TreeNode`, `TweetTree`
+- [x] 3.2 Implement `tree.py` with `build_tree`, `TreeNode`, `TweetTree`
   - Define frozen `TreeNode` dataclass with `year_month`, `tweet_id`, `handle`, `text`, `raw_section` fields
   - Define frozen `TweetTree` dataclass with `nodes_by_month: dict[str, list[TreeNode]]` and `nodes_by_id: dict[str, TreeNode]`
   - Implement `build_tree(by_month_dir: Path) -> TweetTree`:
