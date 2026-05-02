@@ -654,3 +654,318 @@ def test_cosine_top_k_invalid_k_raises() -> None:
 
     with pytest.raises(ValueError):
         embedder.cosine_top_k(query, corpus, k=-1)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3: on-disk cache helpers (_save_cache, _load_cache)
+#
+# Covers:
+#   * Atomic writes via temp + rename (req 2.7).
+#   * Build fails on unwritable output dir (req 2.8 — write side).
+#   * .npy + .meta.json shape (req 3.1, 3.2).
+#   * Schema-version mismatch forces rebuild via None return (req 3.3).
+#   * Missing/unreadable file forces rebuild via None return (req 3.4).
+#
+# The helpers are module-level (not Embedder methods); tests reach them via
+# the ``emb`` import directly.
+
+import json  # noqa: E402  (deliberately co-located with the cache tests)
+from pathlib import Path  # noqa: E402
+
+
+def test_cache_filename_constants_exposed() -> None:
+    # Callers (and tests) should not have to string-literal the filenames;
+    # they live as module-level constants.
+    assert emb.CACHE_NPY_NAME == "corpus_embeddings.npy"
+    assert emb.CACHE_META_NAME == "corpus_embeddings.meta.json"
+
+
+def _sample_matrix(n: int = 3, d: int = 5) -> np.ndarray:
+    """Stable matrix for round-trip tests; values are easy to eyeball."""
+
+    return np.array(
+        [[float(i * d + j) for j in range(d)] for i in range(n)],
+        dtype=np.float32,
+    )
+
+
+def test_save_cache_writes_npy_and_meta_atomically(tmp_path: Path) -> None:
+    matrix = _sample_matrix(n=3, d=5)
+    ordered_ids = ["a", "b", "c"]
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ordered_ids, "model-X")
+
+    assert cache_npy.exists()
+    assert cache_meta.exists()
+
+    # The npy file loads back to the same matrix.
+    loaded_matrix = np.load(cache_npy, allow_pickle=False)
+    assert np.array_equal(loaded_matrix, matrix)
+    assert loaded_matrix.dtype == matrix.dtype
+
+    # Metadata has all five required fields with the right values.
+    meta = json.loads(cache_meta.read_text())
+    assert meta["schema_version"] == emb.CACHE_SCHEMA_VERSION
+    assert meta["model_name"] == "model-X"
+    assert meta["n_tweets"] == 3
+    assert meta["embedding_dim"] == 5
+    assert meta["tweet_ids_in_order"] == ["a", "b", "c"]
+
+
+def test_save_cache_uses_tmp_then_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    matrix = _sample_matrix(n=2, d=3)
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    captured: list[tuple[Path, Path]] = []
+    real_replace = emb.os.replace
+
+    def spy_replace(src, dst):  # type: ignore[no-untyped-def]
+        captured.append((Path(str(src)), Path(str(dst))))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(emb.os, "replace", spy_replace)
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b"], "model-X")
+
+    # Both canonical paths were the destination of an os.replace call.
+    destinations = {dst for _, dst in captured}
+    assert cache_npy in destinations
+    assert cache_meta in destinations
+
+    # Sources end in .tmp so atomic semantics held.
+    sources = [src for src, _ in captured]
+    for src in sources:
+        assert str(src).endswith(".tmp"), f"non-tmp source: {src}"
+
+    # No .tmp leftovers in the cache directory.
+    leftover_tmps = list(tmp_path.glob("*.tmp"))
+    assert leftover_tmps == []
+
+
+def test_save_cache_unwritable_dir_raises(tmp_path: Path) -> None:
+    # Path under a directory that does not exist; the .tmp write fails.
+    bad_dir = tmp_path / "does_not_exist"
+    cache_npy = bad_dir / emb.CACHE_NPY_NAME
+    cache_meta = bad_dir / emb.CACHE_META_NAME
+
+    matrix = _sample_matrix(n=2, d=3)
+
+    with pytest.raises(emb.EmbeddingError) as excinfo:
+        emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b"], "model-X")
+
+    msg = str(excinfo.value)
+    # Error names the directory so the operator can find it.
+    assert str(bad_dir) in msg or "does_not_exist" in msg
+
+
+def test_load_cache_round_trip(tmp_path: Path) -> None:
+    matrix = _sample_matrix(n=4, d=7)
+    ordered_ids = ["a", "b", "c", "d"]
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ordered_ids, "model-X")
+
+    loaded = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids=set(ordered_ids),
+    )
+
+    assert loaded is not None
+    assert isinstance(loaded, emb.CorpusEmbeddings)
+    assert np.array_equal(loaded.matrix, matrix)
+    assert loaded.ordered_ids == ordered_ids
+    assert loaded.model_name == "model-X"
+
+
+def test_load_cache_missing_npy_returns_none(tmp_path: Path) -> None:
+    # Only the meta file exists.
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+    cache_meta.write_text(
+        json.dumps(
+            {
+                "schema_version": emb.CACHE_SCHEMA_VERSION,
+                "model_name": "model-X",
+                "n_tweets": 2,
+                "embedding_dim": 3,
+                "tweet_ids_in_order": ["a", "b"],
+            }
+        )
+    )
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b"},
+    )
+    assert result is None
+
+
+def test_load_cache_missing_meta_returns_none(tmp_path: Path) -> None:
+    # Only the npy file exists.
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+    np.save(cache_npy, _sample_matrix(n=2, d=3))
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b"},
+    )
+    assert result is None
+
+
+def test_load_cache_corrupt_meta_returns_none(tmp_path: Path) -> None:
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+    np.save(cache_npy, _sample_matrix(n=2, d=3))
+    cache_meta.write_text("not json {{{")
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b"},
+    )
+    assert result is None
+
+
+def test_load_cache_corrupt_npy_returns_none(tmp_path: Path) -> None:
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+    cache_npy.write_bytes(b"not a real npy file")
+    cache_meta.write_text(
+        json.dumps(
+            {
+                "schema_version": emb.CACHE_SCHEMA_VERSION,
+                "model_name": "model-X",
+                "n_tweets": 2,
+                "embedding_dim": 3,
+                "tweet_ids_in_order": ["a", "b"],
+            }
+        )
+    )
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b"},
+    )
+    assert result is None
+
+
+def test_load_cache_schema_version_mismatch_returns_none(tmp_path: Path) -> None:
+    matrix = _sample_matrix(n=2, d=3)
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b"], "model-X")
+
+    # Patch the schema_version field to something the loader does not expect.
+    meta = json.loads(cache_meta.read_text())
+    meta["schema_version"] = 999
+    cache_meta.write_text(json.dumps(meta))
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b"},
+        expected_schema_version=emb.CACHE_SCHEMA_VERSION,
+    )
+    assert result is None
+
+
+def test_load_cache_model_name_mismatch_returns_none(tmp_path: Path) -> None:
+    matrix = _sample_matrix(n=2, d=3)
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b"], "model-A")
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-B",
+        expected_ids={"a", "b"},
+    )
+    assert result is None
+
+
+def test_load_cache_id_set_mismatch_returns_none(tmp_path: Path) -> None:
+    matrix = _sample_matrix(n=3, d=4)
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b", "c"], "model-X")
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b", "d"},  # "d" not in cache, "c" missing from expected
+    )
+    assert result is None
+
+
+def test_load_cache_shape_mismatch_returns_none(tmp_path: Path) -> None:
+    # Hand-craft a cache where the meta says (5, 4) but the matrix is (5, 3).
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    matrix = np.zeros((5, 3), dtype=np.float32)
+    np.save(cache_npy, matrix)
+
+    cache_meta.write_text(
+        json.dumps(
+            {
+                "schema_version": emb.CACHE_SCHEMA_VERSION,
+                "model_name": "model-X",
+                "n_tweets": 5,
+                "embedding_dim": 4,
+                "tweet_ids_in_order": ["a", "b", "c", "d", "e"],
+            }
+        )
+    )
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b", "c", "d", "e"},
+    )
+    assert result is None
+
+
+def test_load_cache_extra_id_in_meta_returns_none(tmp_path: Path) -> None:
+    # Save a (2, D) cache, then patch the meta to claim three tweet ids.
+    # The matrix shape no longer matches n_tweets, so the loader returns None.
+    matrix = _sample_matrix(n=2, d=3)
+    cache_npy = tmp_path / emb.CACHE_NPY_NAME
+    cache_meta = tmp_path / emb.CACHE_META_NAME
+
+    emb._save_cache(cache_npy, cache_meta, matrix, ["a", "b"], "model-X")
+
+    meta = json.loads(cache_meta.read_text())
+    meta["tweet_ids_in_order"] = ["a", "b", "c"]
+    meta["n_tweets"] = 3
+    cache_meta.write_text(json.dumps(meta))
+
+    result = emb._load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model="model-X",
+        expected_ids={"a", "b", "c"},
+    )
+    assert result is None

@@ -28,8 +28,11 @@ Design notes:
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import openai
@@ -51,11 +54,20 @@ DEFAULT_TOP_K: int = 200
 DEFAULT_BATCH_SIZE: int = 32
 DEFAULT_MAX_RETRIES: int = 3
 
+# Canonical filenames for the on-disk corpus cache. Callers (notably
+# ``open_or_build_corpus`` in task 2.4 and the index integration in task
+# 3.1) reference these constants instead of string-literaling the names so
+# a future rename only touches one site.
+CACHE_NPY_NAME: str = "corpus_embeddings.npy"
+CACHE_META_NAME: str = "corpus_embeddings.meta.json"
+
 # Re-exported so callers can ``from x_likes_mcp.embeddings import
 # DEFAULT_EMBEDDING_MODEL`` (the spec lists it in the embeddings.py
 # constants block).
 __all__ = [
     "CACHE_SCHEMA_VERSION",
+    "CACHE_NPY_NAME",
+    "CACHE_META_NAME",
     "DEFAULT_BASE_URL",
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_TOP_K",
@@ -419,3 +431,208 @@ class Embedder:
         return [
             (corpus.ordered_ids[int(i)], float(scores[int(i)])) for i in selected
         ]
+
+
+# ---------------------------------------------------------------------------
+# On-disk cache helpers (task 2.3)
+#
+# These are module-level functions, not methods on ``Embedder``. The
+# ``open_or_build_corpus`` orchestrator (task 2.4) calls them; ``Embedder``
+# itself stays focused on the HTTP seam and on the cosine math.
+#
+# Format:
+#   * ``corpus_embeddings.npy`` — numpy float32 matrix of shape ``(N, D)``,
+#     L2-normalized rows, written via ``np.lib.format.write_array`` so the
+#     ``.tmp`` filename is honored exactly (``np.save`` would otherwise
+#     append an extra ``.npy`` suffix to a non-``.npy`` path).
+#   * ``corpus_embeddings.meta.json`` — JSON sidecar with the documented
+#     schema fields (``schema_version``, ``model_name``, ``n_tweets``,
+#     ``embedding_dim``, ``tweet_ids_in_order``).
+#
+# Atomicity: each file is first written to ``<path>.tmp``, then promoted
+# with ``os.replace``. ``os.replace`` is atomic on POSIX and on Windows
+# (when both paths sit on the same filesystem), so a crash mid-write
+# leaves either the previous cache file intact or no file at all — never a
+# half-written one. We do NOT replace until both ``.tmp`` files have been
+# written successfully, but the two replacements themselves are sequential
+# (a crash between them can leave one file new and one file old; the
+# loader's invalidation checks (id-set + schema) catch that case and force
+# a rebuild).
+
+
+def _save_cache(
+    cache_npy: Path,
+    cache_meta: Path,
+    matrix: np.ndarray,
+    ordered_ids: list[str],
+    model_name: str,
+) -> None:
+    """Write the corpus matrix and metadata sidecar atomically.
+
+    The matrix lands at ``cache_npy`` and the metadata JSON at
+    ``cache_meta``. Both writes go through ``<path>.tmp`` companions and
+    are then promoted with :func:`os.replace`. On any I/O failure the
+    function raises :class:`EmbeddingError` naming the parent directory,
+    and tries to clean up any ``.tmp`` artefacts it managed to create.
+
+    The metadata schema:
+
+    .. code-block:: json
+
+        {
+          "schema_version": <CACHE_SCHEMA_VERSION>,
+          "model_name": "<str>",
+          "n_tweets": <int>,
+          "embedding_dim": <int = matrix.shape[1]>,
+          "tweet_ids_in_order": [<id>, ...]
+        }
+
+    ``embedding_dim`` is read from ``matrix.shape[1]``; an empty corpus
+    (``matrix.shape == (0, 0)``) records ``embedding_dim=0``. Callers that
+    care about an empty corpus should short-circuit before calling this
+    helper (the orchestrator in task 2.4 does that).
+    """
+
+    tmp_npy = cache_npy.with_suffix(cache_npy.suffix + ".tmp")
+    tmp_meta = cache_meta.with_suffix(cache_meta.suffix + ".tmp")
+
+    # ``embedding_dim`` is matrix.shape[1] for any 2-D matrix (including a
+    # ``(0, D)`` corpus). For a defensively-shaped non-2-D input (which
+    # callers should not hand us, but which the orchestrator's empty case
+    # ``np.zeros((0, 0))`` already covers) we record 0 so the meta file
+    # remains internally consistent.
+    embedding_dim = int(matrix.shape[1]) if matrix.ndim == 2 else 0
+
+    metadata = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "model_name": model_name,
+        "n_tweets": len(ordered_ids),
+        "embedding_dim": embedding_dim,
+        "tweet_ids_in_order": list(ordered_ids),
+    }
+
+    try:
+        # Write the matrix to <cache_npy>.tmp. We use the lower-level
+        # ``np.lib.format.write_array`` against an open file handle so the
+        # filename is honored exactly. ``np.save(path, ...)`` would
+        # otherwise append ".npy" to any non-".npy" path, leaving a
+        # surprise ``<...>.tmp.npy`` file behind.
+        with open(tmp_npy, "wb") as fh:
+            np.lib.format.write_array(fh, matrix, allow_pickle=False)
+
+        # Write metadata as pretty JSON so the sidecar is human-inspectable.
+        with open(tmp_meta, "w", encoding="utf-8") as fh:
+            json.dump(metadata, fh, indent=2, ensure_ascii=False)
+
+        # Promote both files atomically. If the first replace succeeds and
+        # the second fails, the loader's invalidation checks (id-set +
+        # schema) will reject the half-promoted cache and trigger a
+        # rebuild on the next start.
+        os.replace(tmp_npy, cache_npy)
+        os.replace(tmp_meta, cache_meta)
+    except OSError as exc:
+        # Clean up any tmp files we managed to create. ``missing_ok=True``
+        # skips files that were never written (or were already promoted).
+        for tmp in (tmp_npy, tmp_meta):
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                # Cleanup is best-effort; we are already in the error path.
+                pass
+        raise EmbeddingError(
+            f"Failed to write embedding cache to {cache_npy.parent}: {exc}"
+        ) from exc
+
+
+def _load_cache(
+    cache_npy: Path,
+    cache_meta: Path,
+    expected_model: str,
+    expected_ids: set[str],
+    expected_schema_version: int = CACHE_SCHEMA_VERSION,
+) -> CorpusEmbeddings | None:
+    """Load the cached corpus if every invalidation check passes.
+
+    Returns a :class:`CorpusEmbeddings` only when:
+
+    * Both files exist and parse cleanly.
+    * ``meta["schema_version"] == expected_schema_version``.
+    * ``meta["model_name"] == expected_model``.
+    * ``set(meta["tweet_ids_in_order"]) == expected_ids``.
+    * ``matrix.shape == (len(meta["tweet_ids_in_order"]), meta["embedding_dim"])``.
+
+    Returns ``None`` when ANY of those checks fails. Missing files,
+    malformed JSON, corrupt npy data, schema mismatch, model mismatch,
+    id-set mismatch, and shape mismatch all map to ``None`` — they all
+    force a rebuild via the same code path.
+
+    This helper does not raise on the "rebuild is needed" cases. The only
+    exceptions that propagate out are unexpected I/O errors that are not
+    "file is missing" (e.g. a permission denied on a file that does
+    exist), which surface as :class:`EmbeddingError` so real I/O problems
+    are not silently masked as cache misses.
+    """
+
+    # Existence check up front. This avoids relying on FileNotFoundError
+    # round-trips deeper in the pipeline.
+    if not cache_npy.exists() or not cache_meta.exists():
+        return None
+
+    # Parse metadata. JSON / encoding errors -> rebuild.
+    try:
+        with open(cache_meta, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except FileNotFoundError:
+        # Race between the existence check and the open: treat as missing.
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    except OSError as exc:
+        # Real I/O problem (e.g. permission denied). Surface it.
+        raise EmbeddingError(
+            f"Failed to read embedding cache metadata at {cache_meta}: {exc}"
+        ) from exc
+
+    # Schema version. Missing field or non-int counts as "absent" -> rebuild.
+    schema_version = meta.get("schema_version")
+    if not isinstance(schema_version, int) or schema_version != expected_schema_version:
+        return None
+
+    # Model name. Mismatch (or missing) -> rebuild.
+    cached_model = meta.get("model_name")
+    if not isinstance(cached_model, str) or cached_model != expected_model:
+        return None
+
+    # Tweet ids in order. Validate type, then compare as sets.
+    tweet_ids = meta.get("tweet_ids_in_order")
+    if not isinstance(tweet_ids, list) or not all(isinstance(t, str) for t in tweet_ids):
+        return None
+    if set(tweet_ids) != expected_ids:
+        return None
+
+    # Embedding dim must be present and an int for the shape check.
+    embedding_dim = meta.get("embedding_dim")
+    if not isinstance(embedding_dim, int):
+        return None
+
+    # Load the matrix. Corrupt files raise ValueError or OSError; both -> None.
+    try:
+        matrix = np.load(cache_npy, allow_pickle=False)
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError):
+        # ``np.load`` raises ValueError on a malformed npy header and
+        # OSError on truncated reads. Both are recoverable via rebuild.
+        return None
+
+    # Shape sanity. The metadata records (n_tweets, embedding_dim); the
+    # matrix must agree exactly.
+    expected_shape = (len(tweet_ids), embedding_dim)
+    if matrix.shape != expected_shape:
+        return None
+
+    return CorpusEmbeddings(
+        matrix=matrix,
+        ordered_ids=list(tweet_ids),
+        model_name=expected_model,
+    )

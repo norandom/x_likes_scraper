@@ -38,7 +38,7 @@
   - _Boundary: x_likes_mcp/embeddings.py_
   - _Depends: 2.1_
 
-- [ ] 2.3 Implement the on-disk cache: format, atomic writes, validation
+- [x] 2.3 Implement the on-disk cache: format, atomic writes, validation
   - Add `_save_cache(cache_npy, cache_meta, matrix, ordered_ids, model_name)` and `_load_cache(cache_npy, cache_meta, expected_model, expected_ids, expected_schema_version)` helpers in `embeddings.py`.
   - Save the matrix with `np.save` and the metadata with `json.dump` (`schema_version`, `model_name`, `n_tweets`, `embedding_dim`, `tweet_ids_in_order`). Both writes go to `*.tmp` files that are then `os.replace`d onto the canonical paths.
   - `_load_cache` returns a `CorpusEmbeddings` only when all three checks pass (model name, id set equality, schema version equality). Missing or unreadable files return `None`.
