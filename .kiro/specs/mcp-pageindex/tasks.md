@@ -178,7 +178,7 @@
   - _Depends: 1.6, 2.3_
   - _Boundary: x_likes_mcp/ranker.py_
 
-- [ ] 3.3d Implement `TweetIndex.search` orchestrating resolve → walk → rank
+- [x] 3.3d Implement `TweetIndex.search` orchestrating resolve → walk → rank
   - Implement `search(query, year=None, month_start=None, month_end=None, top_n=50)` that:
     - Calls `self._resolve_filter(year, month_start, month_end)` → `months_in_scope or None`
     - Computes the recency anchor: end of `month_end` if both `month_start` and `month_end` set; end of `month_start`'s month if `month_start` set without `month_end`; end of `year` if only `year` set; `datetime.now(timezone.utc)` otherwise
@@ -191,7 +191,7 @@
   - _Depends: 3.1, 3.2, 3.3a, 3.3b, 3.3c_
   - _Boundary: x_likes_mcp/index.py_
 
-- [ ] 3.4 (P) Implement `TweetIndex.lookup_tweet`, `list_months`, `get_month_markdown`
+- [x] 3.4 (P) Implement `TweetIndex.lookup_tweet`, `list_months`, `get_month_markdown`
   - `lookup_tweet(tweet_id)` returns `self._tweets_by_id.get(tweet_id)` (`None` when missing)
   - `list_months()` consults `paths_by_month`, parses `YYYY-MM` from each filename, groups the in-memory tweet list by `Tweet.get_created_datetime()` to produce counts (tweets with unparseable `created_at` are skipped from counts), returns `MonthInfo` list sorted reverse-chronologically
   - `get_month_markdown(year_month)` reads `by_month_dir / f"likes_{year_month}.md"` if the file exists; returns `None` otherwise

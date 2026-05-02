@@ -25,9 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from datetime import datetime, timezone
+
 from x_likes_exporter import iter_monthly_markdown, load_export
 
+from . import ranker as ranker_module
 from . import tree as tree_module
+from . import walker as walker_module
 from .config import Config, RankerWeights
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -170,6 +174,52 @@ class TweetIndex:
             weights=weights,
         )
 
+    # --- per-tweet / per-month read paths ---------------------------------
+
+    def lookup_tweet(self, tweet_id: str) -> Tweet | None:
+        """Return the :class:`Tweet` with the given id, or ``None``."""
+        return self.tweets_by_id.get(tweet_id)
+
+    def list_months(self) -> list[MonthInfo]:
+        """List available months reverse-chronologically with tweet counts.
+
+        Counts come from the in-memory tweet list grouped by
+        ``Tweet.get_created_datetime``; tweets with unparseable
+        ``created_at`` are skipped from counts but the month entry
+        still appears as long as the file is on disk.
+        """
+        # Group counts by YYYY-MM via the tweet's parseable date.
+        counts: dict[str, int] = {}
+        for tweet in self.tweets:
+            try:
+                created = tweet.get_created_datetime()
+            except (ValueError, TypeError):
+                continue
+            ym = created.strftime("%Y-%m")
+            counts[ym] = counts.get(ym, 0) + 1
+
+        infos: list[MonthInfo] = []
+        for year_month, path in self.paths_by_month.items():
+            infos.append(
+                MonthInfo(
+                    year_month=year_month,
+                    path=path,
+                    tweet_count=counts.get(year_month),
+                )
+            )
+        infos.sort(key=lambda m: m.year_month, reverse=True)
+        return infos
+
+    def get_month_markdown(self, year_month: str) -> str | None:
+        """Read the per-month Markdown file. ``None`` if missing."""
+        path = self.paths_by_month.get(year_month)
+        if path is None:
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+
     # --- query / search seams ---------------------------------------------
 
     def _resolve_filter(
@@ -242,6 +292,55 @@ class TweetIndex:
         year: int | None = None,
         month_start: str | None = None,
         month_end: str | None = None,
-    ) -> list[Any]:
-        """Implemented by task 3.3d."""
-        raise NotImplementedError("task 3.3d")
+        top_n: int = 50,
+    ) -> list[ranker_module.ScoredHit]:
+        """Resolve filter, walk the in-scope subtree, rank, return top-N.
+
+        Walker and ranker exceptions propagate; the tools layer shapes
+        them into MCP error responses.
+        """
+        months_in_scope = self._resolve_filter(year, month_start, month_end)
+        anchor = _compute_anchor(year, month_start, month_end)
+
+        walker_hits = walker_module.walk(
+            self.tree, query, months_in_scope, self.config
+        )
+        scored = ranker_module.rank(
+            walker_hits,
+            self.tweets_by_id,
+            self.author_affinity,
+            self.weights,
+            anchor=anchor,
+        )
+        return scored[:top_n]
+
+
+def _compute_anchor(
+    year: int | None,
+    month_start: str | None,
+    month_end: str | None,
+) -> datetime:
+    """Recency anchor for the ranker:
+
+    - end of ``month_end``'s month if both ``month_start`` and ``month_end`` set
+    - end of ``month_start``'s month if ``month_start`` set without ``month_end``
+    - end of ``year`` if only ``year`` set
+    - ``datetime.now(timezone.utc)`` otherwise
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    if year is None:
+        return now_utc
+
+    if month_start is None and month_end is None:
+        return datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    target_month_str = month_end or month_start
+    target_month = int(target_month_str)  # already validated by _resolve_filter
+    if target_month == 12:
+        return datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    next_month_first = datetime(year, target_month + 1, 1, tzinfo=timezone.utc)
+    # End of target_month = first of next month minus a microsecond.
+    return datetime.fromtimestamp(
+        next_month_first.timestamp() - 0.000001, tz=timezone.utc
+    )
