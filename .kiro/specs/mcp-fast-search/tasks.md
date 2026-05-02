@@ -111,7 +111,7 @@
   - _Depends: 3.1, 3.2, 2.6_
 
 - [ ] 4. Tool layer rewrite
-- [ ] 4.1 Add `with_why` to `tools.search_likes` with hybrid + fallback semantics
+- [x] 4.1 Add `with_why` to `tools.search_likes` with hybrid + fallback semantics
   - Extend `tools.search_likes` with `with_why: bool = False`.
   - Validate `with_why`: `None` or absent treats as `False`; non-`bool` raises `errors.invalid_input("with_why", ...)`.
   - When `with_why=False`, return the `_shape_hit(...)` results from `index.search` directly. Set `walker_relevance` from the synthetic `WalkerHit.relevance` (cosine score, or `0.0` when only BM25 had the id) and `why` to an empty string.

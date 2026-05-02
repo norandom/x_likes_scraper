@@ -25,11 +25,12 @@ import pytest
 
 from x_likes_exporter import load_export
 from x_likes_mcp import tools
+from x_likes_mcp.embeddings import EmbeddingError
 from x_likes_mcp.errors import ToolError
 from x_likes_mcp.index import MonthInfo
 from x_likes_mcp.ranker import ScoredHit
 from x_likes_mcp.tree import TreeNode, TweetTree
-from x_likes_mcp.walker import WalkerError
+from x_likes_mcp.walker import WalkerError, WalkerHit
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -173,7 +174,13 @@ def test_search_likes_translates_value_error_to_invalid_input() -> None:
 
 
 def test_search_likes_translates_walker_error_to_upstream_failure() -> None:
-    """``WalkerError`` from the walker becomes an ``upstream_failure`` tool error."""
+    """``WalkerError`` bubbling out of ``index.search`` becomes ``upstream_failure``.
+
+    Post-task-3.3 ``index.search`` no longer calls the walker, so this is now
+    a pure boundary translation test: any non-``ToolError`` exception from the
+    seam (including a hypothetical re-raised ``WalkerError``) maps to
+    ``upstream_failure``.
+    """
     idx = _make_index_mock()
     idx.search.side_effect = WalkerError("LLM down")
     with pytest.raises(ToolError) as excinfo:
@@ -190,6 +197,271 @@ def test_search_likes_translates_generic_exception_to_upstream_failure() -> None
         tools.search_likes(idx, "x")
     assert excinfo.value.category == "upstream_failure"
     assert "disk gone" in excinfo.value.message
+
+
+def test_search_likes_embedding_error_becomes_upstream_failure() -> None:
+    """``EmbeddingError`` (raised when both retrievals fail) maps to ``upstream_failure``."""
+    idx = _make_index_mock()
+    idx.search.side_effect = EmbeddingError("both retrieval paths failed")
+    with pytest.raises(ToolError) as excinfo:
+        tools.search_likes(idx, "x")
+    assert excinfo.value.category == "upstream_failure"
+    assert "both retrieval paths failed" in excinfo.value.message
+
+
+# ---------------------------------------------------------------------------
+# search_likes — with_why semantics
+
+
+def test_search_likes_default_with_why_false_returns_shaped_dicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default call returns shaped dicts and never invokes the explainer.
+
+    Patches ``_call_walker_explainer`` to raise so the test asserts the
+    default path does not touch it.
+    """
+
+    def _explode(*_args: object, **_kwargs: object) -> dict[str, WalkerHit]:
+        raise AssertionError("explainer must not be called when with_why=False")
+
+    monkeypatch.setattr(tools, "_call_walker_explainer", _explode)
+
+    tweet = _make_tweet_mock(tweet_id="1001", text="hello", year_month="2025-01")
+    idx = _make_index_mock(tweets_by_id={"1001": tweet})
+    idx.search.return_value = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.42,
+            why="",
+            feature_breakdown={"relevance": 5.0},
+        )
+    ]
+
+    result = tools.search_likes(idx, "x")
+    assert len(result) == 1
+    assert result[0]["tweet_id"] == "1001"
+    assert result[0]["why"] == ""
+    assert result[0]["walker_relevance"] == 0.42
+
+
+def test_search_likes_with_why_true_calls_walker_explainer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``with_why=True`` invokes the explainer with the top results and
+    merges the returned ``WalkerHit`` map onto the response."""
+    captured: dict[str, object] = {}
+
+    def _fake_explainer(
+        top_results: list[ScoredHit],
+        query: str,
+        index: object,
+    ) -> dict[str, WalkerHit]:
+        captured["top_results"] = top_results
+        captured["query"] = query
+        captured["index"] = index
+        return {
+            "1001": WalkerHit(
+                tweet_id="1001", relevance=0.91, why="explainer reason"
+            )
+        }
+
+    monkeypatch.setattr(tools, "_call_walker_explainer", _fake_explainer)
+
+    tweet = _make_tweet_mock(tweet_id="1001", text="hello", year_month="2025-01")
+    idx = _make_index_mock(tweets_by_id={"1001": tweet})
+    scored = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.42,
+            why="",
+            feature_breakdown={"relevance": 5.0},
+        )
+    ]
+    idx.search.return_value = scored
+
+    result = tools.search_likes(idx, "deep query", with_why=True)
+    assert len(result) == 1
+    assert result[0]["why"] == "explainer reason"
+    assert result[0]["walker_relevance"] == 0.91
+    # The explainer received the ScoredHit slice (top-20-or-fewer), the query,
+    # and the index reference.
+    assert captured["query"] == "deep query"
+    assert captured["index"] is idx
+    assert captured["top_results"] == scored
+
+
+def test_search_likes_with_why_true_explainer_passed_at_most_top_20(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The explainer receives at most 20 ScoredHits even when search returned more."""
+    captured: dict[str, object] = {}
+
+    def _fake_explainer(
+        top_results: list[ScoredHit],
+        query: str,
+        index: object,
+    ) -> dict[str, WalkerHit]:
+        captured["count"] = len(top_results)
+        return {}
+
+    monkeypatch.setattr(tools, "_call_walker_explainer", _fake_explainer)
+
+    # 30 scored hits; tools should pass only top-20 to the explainer.
+    tweets_by_id: dict[str, object] = {}
+    scored: list[ScoredHit] = []
+    for n in range(30):
+        tid = str(1000 + n)
+        tweets_by_id[tid] = _make_tweet_mock(
+            tweet_id=tid, text=f"t{n}", year_month="2025-01"
+        )
+        scored.append(
+            ScoredHit(
+                tweet_id=tid,
+                score=10.0 - n * 0.1,
+                walker_relevance=0.5,
+                why="",
+                feature_breakdown={"relevance": 1.0},
+            )
+        )
+    idx = _make_index_mock(tweets_by_id=tweets_by_id)
+    idx.search.return_value = scored
+
+    tools.search_likes(idx, "x", with_why=True)
+    assert captured["count"] == 20
+
+
+def test_search_likes_with_why_true_empty_map_uses_placeholders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the explainer returns ``{}``, results keep cosine-derived placeholders.
+
+    Order is preserved; ``why`` and ``walker_relevance`` come from the
+    ``ScoredHit`` (set by ``index.search``) untouched.
+    """
+    monkeypatch.setattr(
+        tools,
+        "_call_walker_explainer",
+        lambda *_a, **_kw: {},
+    )
+
+    tweet = _make_tweet_mock(tweet_id="1001", text="hello", year_month="2025-01")
+    idx = _make_index_mock(tweets_by_id={"1001": tweet})
+    idx.search.return_value = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.42,
+            why="",
+            feature_breakdown={"relevance": 5.0},
+        )
+    ]
+
+    result = tools.search_likes(idx, "x", with_why=True)
+    assert len(result) == 1
+    assert result[0]["why"] == ""
+    assert result[0]["walker_relevance"] == 0.42
+
+
+def test_search_likes_with_why_true_partial_merge_preserves_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hits not present in the explainer map keep their cosine placeholders;
+    order is preserved across the merge."""
+
+    def _fake_explainer(
+        _top_results: list[ScoredHit],
+        _query: str,
+        _index: object,
+    ) -> dict[str, WalkerHit]:
+        return {
+            "1002": WalkerHit(
+                tweet_id="1002", relevance=0.7, why="explained 1002"
+            )
+        }
+
+    monkeypatch.setattr(tools, "_call_walker_explainer", _fake_explainer)
+
+    tweets_by_id = {
+        "1001": _make_tweet_mock(tweet_id="1001", text="a", year_month="2025-01"),
+        "1002": _make_tweet_mock(tweet_id="1002", text="b", year_month="2025-01"),
+        "1003": _make_tweet_mock(tweet_id="1003", text="c", year_month="2025-01"),
+    }
+    idx = _make_index_mock(tweets_by_id=tweets_by_id)
+    idx.search.return_value = [
+        ScoredHit(
+            tweet_id="1001",
+            score=12.0,
+            walker_relevance=0.4,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+        ScoredHit(
+            tweet_id="1002",
+            score=11.0,
+            walker_relevance=0.3,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+        ScoredHit(
+            tweet_id="1003",
+            score=10.0,
+            walker_relevance=0.2,
+            why="",
+            feature_breakdown={"relevance": 1.0},
+        ),
+    ]
+
+    result = tools.search_likes(idx, "x", with_why=True)
+    assert [r["tweet_id"] for r in result] == ["1001", "1002", "1003"]
+    # 1001 untouched
+    assert result[0]["why"] == ""
+    assert result[0]["walker_relevance"] == 0.4
+    # 1002 merged
+    assert result[1]["why"] == "explained 1002"
+    assert result[1]["walker_relevance"] == 0.7
+    # 1003 untouched
+    assert result[2]["why"] == ""
+    assert result[2]["walker_relevance"] == 0.2
+
+
+def test_search_likes_non_bool_with_why_raises_invalid_input() -> None:
+    """A non-bool, non-None ``with_why`` raises ``invalid_input``."""
+    idx = _make_index_mock()
+    with pytest.raises(ToolError) as excinfo:
+        tools.search_likes(idx, "x", with_why="yes")  # type: ignore[arg-type]
+    assert excinfo.value.category == "invalid_input"
+    assert "with_why" in excinfo.value.message
+    idx.search.assert_not_called()
+
+
+def test_search_likes_with_why_none_treated_as_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``with_why=None`` is tolerated and treated as ``False`` (no explainer call)."""
+
+    def _explode(*_args: object, **_kwargs: object) -> dict[str, WalkerHit]:
+        raise AssertionError("explainer must not run when with_why is None")
+
+    monkeypatch.setattr(tools, "_call_walker_explainer", _explode)
+
+    tweet = _make_tweet_mock(tweet_id="1001", text="hello", year_month="2025-01")
+    idx = _make_index_mock(tweets_by_id={"1001": tweet})
+    idx.search.return_value = [
+        ScoredHit(
+            tweet_id="1001",
+            score=10.0,
+            walker_relevance=0.42,
+            why="",
+            feature_breakdown={"relevance": 5.0},
+        )
+    ]
+
+    result = tools.search_likes(idx, "x", with_why=None)  # type: ignore[arg-type]
+    assert len(result) == 1
+    assert result[0]["why"] == ""
 
 
 # ---------------------------------------------------------------------------

@@ -3,13 +3,21 @@
 
 Each handler is thin: validate input, call into :class:`TweetIndex`, shape
 the response. All input-shape errors raise :class:`ToolError` instances built
-through the :mod:`x_likes_mcp.errors` factories. Failures from the walker (or
-any other non-``ToolError`` exception bubbling out of ``index.search``) are
-re-shaped as ``upstream_failure`` so the server boundary can return a clean
-error response without crashing.
+through the :mod:`x_likes_mcp.errors` factories. Failures from the hybrid
+retrieval pipeline (``EmbeddingError`` raised when both retrievals failed,
+or any other non-``ToolError`` exception bubbling out of ``index.search``)
+are re-shaped as ``upstream_failure`` so the server boundary can return a
+clean error response without crashing.
 
-Boundary: this module imports only from ``index``, ``errors``, and stdlib /
-``re``. It does not import the OpenAI SDK or perform I/O directly.
+The optional walker explainer (``with_why=True``) is the only place the
+walker is called from this layer; ``index.search`` no longer touches it.
+The explainer helper catches its own errors and returns an empty map on
+failure, so an explainer blip never fails the surrounding ``search_likes``
+call (req 8.4).
+
+Boundary: this module imports only from ``index``, ``errors``, ``walker``,
+and stdlib / ``re``. It does not import the OpenAI SDK or perform I/O
+directly.
 """
 
 from __future__ import annotations
@@ -21,6 +29,8 @@ from . import errors
 
 if TYPE_CHECKING:  # pragma: no cover
     from .index import TweetIndex
+    from .ranker import ScoredHit
+    from .walker import WalkerHit
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +148,34 @@ def _validate_filter(
         raise errors.invalid_input("filter", "month_end requires month_start")
 
 
+def _validate_with_why(with_why: Any) -> bool:
+    """Return a normalized bool for ``with_why``.
+
+    ``None`` is tolerated and treated as ``False`` so MCP clients that
+    omit the field land on the cheap default path. Any other non-bool
+    raises ``invalid_input("with_why", ...)``.
+    """
+    if with_why is None:
+        return False
+    if not isinstance(with_why, bool):
+        raise errors.invalid_input(
+            "with_why",
+            f"must be a bool, got {type(with_why).__name__}",
+        )
+    return with_why
+
+
 def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     """Convert a ``ScoredHit`` plus the loaded tweet/tree to the dict shape
-    the MCP client receives."""
+    the MCP client receives.
+
+    ``walker_relevance`` is clamped to ``[0, 1]`` (req 7.8). For the default
+    path it carries the dense cosine similarity score (already in ``[0, 1]``
+    on L2-normalized text embeddings for any non-adversarial input); the
+    clamp is defensive. For the explainer path the value comes from the
+    walker's parsed JSON, which is also bounded ``[0, 1]`` by the walker's
+    own validation.
+    """
     tweet = index.tweets_by_id.get(hit.tweet_id)
     node = index.tree.nodes_by_id.get(hit.tweet_id)
 
@@ -154,16 +189,48 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
         handle = ""
         snippet = ""
 
+    walker_relevance = max(0.0, min(1.0, float(hit.walker_relevance)))
+
     return {
         "tweet_id": hit.tweet_id,
         "year_month": _resolve_year_month(index, hit.tweet_id),
         "handle": handle,
         "snippet": snippet,
         "score": hit.score,
-        "walker_relevance": hit.walker_relevance,
-        "why": hit.why,
+        "walker_relevance": walker_relevance,
+        "why": hit.why or "",
         "feature_breakdown": dict(hit.feature_breakdown),
     }
+
+
+# How many top-ranked tweets the optional explainer is asked to rationalize.
+# The walker is a single-shot LLM call; 20 keeps the prompt under chunk-size
+# limits and matches req 8.2.
+_EXPLAINER_TOP_N = 20
+
+
+def _call_walker_explainer(
+    top_results: list[ScoredHit],
+    query: str,
+    index: TweetIndex,
+) -> dict[str, WalkerHit]:
+    """Return a ``{tweet_id: WalkerHit}`` map populated by the walker over the
+    top ranked results.
+
+    This is the only place :func:`x_likes_mcp.walker.walk` is invoked from
+    the tool layer; the default ``search_likes`` path never touches it.
+    Failures (including :class:`x_likes_mcp.walker.WalkerError`) are caught
+    inside the helper, logged once to stderr, and surface as an empty map so
+    the surrounding call still succeeds with cosine-derived placeholders
+    (req 8.4).
+
+    Stub: the body is empty — task 4.2 of the ``mcp-fast-search`` spec
+    replaces it with the real explainer that drives ``walker.walk`` over
+    a synthetic single-chunk tree. Until then, ``with_why=True`` calls
+    receive the cosine-derived placeholders the ranker already populated
+    on each :class:`ScoredHit`.
+    """
+    return {}
 
 
 def search_likes(
@@ -172,13 +239,39 @@ def search_likes(
     year: int | None = None,
     month_start: str | None = None,
     month_end: str | None = None,
+    with_why: bool = False,
 ) -> list[dict[str, Any]]:
     """Return up to N ranked search hits for ``query``.
 
-    Validates ``query`` and the structured filter; translates resolver
-    ``ValueError``\\ s to ``invalid_input`` and any non-``ToolError``
-    exception (notably :class:`x_likes_mcp.walker.WalkerError`) to
-    ``upstream_failure``.
+    Pipeline:
+      1. Validate ``query``, the structured filter, and ``with_why``.
+      2. Call :meth:`TweetIndex.search`, which runs hybrid recall (BM25
+         + dense via OpenRouter) and the heavy ranker.
+      3. When ``with_why=True``, hand the top-20 ranked hits to
+         :func:`_call_walker_explainer` and merge the returned
+         ``{tweet_id: WalkerHit}`` map onto the matching results
+         in place: ``why`` and ``walker_relevance`` are refreshed; the
+         ranker's order is preserved (req 8.3).
+      4. Shape each ``ScoredHit`` into the documented response dict.
+
+    Error translation:
+      - :class:`ValueError` from the resolver → ``invalid_input("filter")``.
+      - :class:`x_likes_mcp.embeddings.EmbeddingError` (raised by
+        ``index.search`` when both retrieval paths failed) →
+        ``upstream_failure``.
+      - Any other non-``ToolError`` exception bubbling out of
+        ``index.search`` → ``upstream_failure``.
+
+    Args:
+        index: The loaded :class:`TweetIndex` (search seam).
+        query: User query; validated, stripped, must be non-empty.
+        year, month_start, month_end: Optional structured filter. Same
+            semantics as before this spec.
+        with_why: When ``True``, runs the optional walker explainer over
+            the top hits to populate ``why``. Defaults to ``False`` so the
+            cheap default path performs zero chat-completions calls
+            (req 7.2 / 8.5). ``None`` is tolerated and treated as
+            ``False``; any other non-bool raises ``invalid_input``.
 
     Returns:
         List of dicts shaped
@@ -187,6 +280,7 @@ def search_likes(
     """
     stripped = _validate_query(query)
     _validate_filter(year, month_start, month_end)
+    explain = _validate_with_why(with_why)
 
     try:
         scored = index.search(stripped, year, month_start, month_end)
@@ -195,9 +289,54 @@ def search_likes(
     except ValueError as exc:
         raise errors.invalid_input("filter", str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — boundary translation is the point
+        # Catches EmbeddingError (both retrievals down) and any other
+        # unexpected error from the index. tools.search_likes is the
+        # boundary that translates non-ToolError exceptions into
+        # upstream_failure ToolErrors.
         raise errors.upstream_failure(str(exc)) from exc
 
-    return [_shape_hit(index, hit) for hit in scored[:_DEFAULT_TOP_N]]
+    top = scored[:_DEFAULT_TOP_N]
+
+    if explain and top:
+        why_map = _call_walker_explainer(top[:_EXPLAINER_TOP_N], stripped, index)
+        if why_map:
+            top = _merge_explainer(top, why_map)
+
+    return [_shape_hit(index, hit) for hit in top]
+
+
+def _merge_explainer(
+    scored: list[ScoredHit],
+    why_map: dict[str, WalkerHit],
+) -> list[ScoredHit]:
+    """Return a new list where each hit present in ``why_map`` carries the
+    walker's ``why`` and ``relevance``.
+
+    Order is preserved (req 8.3). Hits not present in the map are returned
+    unchanged so they keep their cosine-derived placeholders. ``ScoredHit``
+    is a frozen dataclass; we rebuild rather than mutate in place.
+    """
+    # Local import keeps tools.py free of a top-level ranker import (the
+    # ranker module imports walker, which imports openai — pulling all of
+    # that into module load order is unnecessary for the merge step).
+    from .ranker import ScoredHit as _ScoredHit
+
+    merged: list[ScoredHit] = []
+    for hit in scored:
+        wh = why_map.get(hit.tweet_id)
+        if wh is None:
+            merged.append(hit)
+            continue
+        merged.append(
+            _ScoredHit(
+                tweet_id=hit.tweet_id,
+                score=hit.score,
+                walker_relevance=wh.relevance,
+                why=wh.why or "",
+                feature_breakdown=dict(hit.feature_breakdown),
+            )
+        )
+    return merged
 
 
 # ---------------------------------------------------------------------------
