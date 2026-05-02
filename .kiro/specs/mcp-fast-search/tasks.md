@@ -18,7 +18,7 @@
   - _Boundary: x_likes_mcp/config.py, tests/mcp/test_config.py_
 
 - [ ] 2. Core retrieval modules
-- [ ] 2.1 Implement the `Embedder` class with the OpenRouter HTTP seam
+- [x] 2.1 Implement the `Embedder` class with the OpenRouter HTTP seam
   - Create `x_likes_mcp/embeddings.py` with `EmbeddingError`, `CorpusEmbeddings`, `Embedder`, the module-level constants (`CACHE_SCHEMA_VERSION`, `DEFAULT_EMBEDDING_MODEL`, `DEFAULT_BASE_URL`, `DEFAULT_TOP_K`, `DEFAULT_BATCH_SIZE`, `DEFAULT_MAX_RETRIES`), and the shapes described in the design.
   - `Embedder.__init__(api_key, base_url, model_name, batch_size)` records configuration; the `openai.OpenAI(api_key=..., base_url=...)` client is constructed lazily on first `_call_embeddings_api` invocation so tests that patch the seam never construct a real client.
   - `Embedder._call_embeddings_api(texts)` issues one `client.embeddings.create(model=self.model_name, input=texts)` call, sorts the response by `index`, and returns `list[list[float]]`. On `429` and transient `5xx` it retries up to `DEFAULT_MAX_RETRIES` times with exponential backoff (1s, 2s, 4s); after the cap it raises `EmbeddingError` naming the failure cause. `401`/`403` propagate immediately as `EmbeddingError` naming `OPENROUTER_API_KEY`. If `api_key` is empty/`None` at first invocation, raise `EmbeddingError` immediately without an HTTP call.
