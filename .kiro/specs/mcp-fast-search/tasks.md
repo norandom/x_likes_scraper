@@ -66,7 +66,7 @@
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
   - _Boundary: x_likes_mcp/bm25.py_
 
-- [ ] 2.6 Implement the Reciprocal Rank Fusion helper
+- [x] 2.6 Implement the Reciprocal Rank Fusion helper
   - Create `x_likes_mcp/fusion.py` with `DEFAULT_K_RRF = 60`, `DEFAULT_FUSED_TOP = 300`, and `reciprocal_rank_fusion(rankings, k_rrf=60, top=300) -> list[str]`.
   - For each ranking, iterate 1-indexed (rank 1, 2, 3, ...). For each id in each ranking, accumulate `score[d] += 1.0 / (k_rrf + rank)`.
   - Empty rankings are silently ignored. If all rankings are empty, return `[]`.
