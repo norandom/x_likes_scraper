@@ -23,6 +23,28 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class RankerWeights:
+    """Per-feature weights for the heavy-ranker-style scoring formula.
+
+    Defaults are intentionally engagement-and-affinity-heavy: tweets the
+    user already returned to (high author affinity) and tweets that struck
+    a chord with the rest of the network (high engagement) outrank
+    one-off topical matches.
+    """
+
+    relevance: float = 10.0
+    favorite: float = 2.0
+    retweet: float = 2.5
+    reply: float = 1.0
+    view: float = 0.5
+    affinity: float = 3.0
+    recency: float = 1.5
+    verified: float = 0.5
+    media: float = 0.3
+    recency_halflife_days: float = 180.0
+
+
+@dataclass(frozen=True)
 class Config:
     """Resolved server configuration."""
 
@@ -33,6 +55,7 @@ class Config:
     openai_base_url: str
     openai_api_key: str
     openai_model: str
+    ranker_weights: RankerWeights
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -117,11 +140,11 @@ def load_config(
     output_dir = Path(output_dir_raw)
     by_month_dir = output_dir / "by_month"
     likes_json = output_dir / "likes.json"
-    cache_path = output_dir / "pageindex_cache.pkl"
+    cache_path = output_dir / "tweet_tree_cache.pkl"
 
     # Side effect: hand off the OpenAI base URL (and API key, when set) to
-    # ``os.environ`` so the OpenAI SDK that PageIndex instantiates picks them
-    # up at client-construction time.
+    # ``os.environ`` so the OpenAI SDK in walker.py picks them up at
+    # client-construction time.
     os.environ["OPENAI_BASE_URL"] = openai_base_url
     if openai_api_key:
         os.environ["OPENAI_API_KEY"] = openai_api_key
@@ -134,4 +157,37 @@ def load_config(
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_model=openai_model,
+        ranker_weights=_load_ranker_weights(resolved),
+    )
+
+
+def _load_ranker_weights(env: dict[str, str]) -> RankerWeights:
+    """Build ``RankerWeights`` from optional ``RANKER_*`` env entries.
+
+    Any unset variable falls back to the dataclass default. Non-numeric
+    values raise ``ConfigError`` rather than silently using the default,
+    so a typo in ``.env`` is loud.
+    """
+
+    def _f(name: str, default: float) -> float:
+        raw = env.get(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ConfigError(f"{name} is not a valid float: {raw!r}") from exc
+
+    defaults = RankerWeights()
+    return RankerWeights(
+        relevance=_f("RANKER_W_RELEVANCE", defaults.relevance),
+        favorite=_f("RANKER_W_FAVORITE", defaults.favorite),
+        retweet=_f("RANKER_W_RETWEET", defaults.retweet),
+        reply=_f("RANKER_W_REPLY", defaults.reply),
+        view=_f("RANKER_W_VIEW", defaults.view),
+        affinity=_f("RANKER_W_AFFINITY", defaults.affinity),
+        recency=_f("RANKER_W_RECENCY", defaults.recency),
+        verified=_f("RANKER_W_VERIFIED", defaults.verified),
+        media=_f("RANKER_W_MEDIA", defaults.media),
+        recency_halflife_days=_f("RANKER_RECENCY_HALFLIFE_DAYS", defaults.recency_halflife_days),
     )

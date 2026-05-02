@@ -53,7 +53,7 @@
   - _Requirements: 1.4, 11.6, 4.5, 5.6_
   - _Boundary: pyproject.toml, x_likes_mcp/_
 
-- [ ] 1.7 Extend `.env.sample` with the ranker weight variables
+- [x] 1.7 Extend `.env.sample` with the ranker weight variables
   - Append `RANKER_W_RELEVANCE`, `RANKER_W_FAVORITE`, `RANKER_W_RETWEET`, `RANKER_W_REPLY`, `RANKER_W_VIEW`, `RANKER_W_AFFINITY`, `RANKER_W_RECENCY`, `RANKER_W_VERIFIED`, `RANKER_W_MEDIA`, and `RANKER_RECENCY_HALFLIFE_DAYS` entries (all commented-out by default so the in-code defaults apply unless the user opts in)
   - Include a brief comment block stating the score formula and the documented default values
   - Observable completion: `grep RANKER_W_RELEVANCE .env.sample` matches; the formula comment is present
@@ -80,7 +80,7 @@
   - _Requirements: 6.3, 6.5, 8.2, 8.3, 9.3, 9.4, 13.2, 13.4_
   - _Boundary: x_likes_mcp/errors.py_
 
-- [ ] 2.3 Extend `config.py` with `RankerWeights` and `load_ranker_weights`
+- [x] 2.3 Extend `config.py` with `RankerWeights` and `load_ranker_weights`
   - Add a frozen `RankerWeights` dataclass with the nine weight fields plus `recency_halflife_days`, defaults matching the design (`relevance=10.0`, `favorite=2.0`, `retweet=2.5`, `reply=1.0`, `view=0.5`, `affinity=3.0`, `recency=1.5`, `verified=0.5`, `media=0.3`, `recency_halflife_days=180.0`)
   - Implement `load_ranker_weights(env: dict[str, str]) -> RankerWeights` that reads `RANKER_W_RELEVANCE`, `RANKER_W_FAVORITE`, `RANKER_W_RETWEET`, `RANKER_W_REPLY`, `RANKER_W_VIEW`, `RANKER_W_AFFINITY`, `RANKER_W_RECENCY`, `RANKER_W_VERIFIED`, `RANKER_W_MEDIA`, `RANKER_RECENCY_HALFLIFE_DAYS`. Missing keys take defaults; non-numeric values raise `ConfigError` with a message naming the variable.
   - `load_config` continues to return `Config`. Either expose `load_ranker_weights` as a separate function callers invoke, or extend `load_config` to return `(Config, RankerWeights)` — implementer's choice. The integration in `__main__` (task 5.2) is the consumer.
