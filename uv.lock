@@ -537,19 +537,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pageindex"
-version = "0.2.8"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "openai" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/33/cc/27fb5f21b9ea91ed4b74a4d31190271b820955e71a323f260e138f50ef83/pageindex-0.2.8.tar.gz", hash = "sha256:b5baeed581a974cc8348b96527916e9021d48513c2310bb9b3f66a8b677e610c", size = 4986 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/6e/e4ca8bd2453d19aae7d134f5ea37abe3c2f625dd1a5164fcca520d36da5a/pageindex-0.2.8-py3-none-any.whl", hash = "sha256:723321734061990420a338f223abe651502ff082c228d112f9d9bc39e8deaed0", size = 5977 },
-]
-
-[[package]]
 name = "pandas"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1157,7 +1144,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
-    { name = "pageindex" },
+    { name = "openai" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "requests" },
@@ -1173,7 +1160,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.0,<2.0" },
-    { name = "pageindex" },
+    { name = "openai", specifier = ">=1.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "requests", specifier = ">=2.31.0" },

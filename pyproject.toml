@@ -24,7 +24,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "tqdm>=4.66.0",
     "mcp>=1.0,<2.0",
-    "pageindex",
+    "openai>=1.0",
 ]
 
 [project.urls]

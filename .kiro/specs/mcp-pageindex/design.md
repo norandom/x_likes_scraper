@@ -2,40 +2,48 @@
 
 ## Overview
 
-This spec puts a stdio MCP server in front of the per-month Markdown the exporter already produces. The server exposes four tools: `search_likes`, `list_months`, `get_month`, `read_tweet`. `search_likes` is the only one with reasoning behind it. It hands the user's question (plus an optional structured year/month filter) to PageIndex with a tree built from `output/by_month/likes_YYYY-MM.md`, and PageIndex's reasoning step walks that tree to find matches. The other three are file-and-data lookups over the read API from Spec 1.
+This spec puts a stdio MCP server in front of the per-month Markdown the exporter already produces. The server exposes four tools: `search_likes`, `list_months`, `get_month`, `read_tweet`. `search_likes` is the only one with reasoning behind it. It parses the per-month Markdown into a tree, walks the in-scope months with a local LLM (one chat-completions call per chunk of N tweets), and ranks the surviving hits with a heavy-ranker-feature-shape weighted combiner. The other three are file-and-data lookups over the read API from Spec 1.
 
-The reasoning step calls the OpenAI SDK directly, which is what PageIndex uses internally. The local LLM endpoint is configured as OpenAI-compatible: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. PageIndex is invoked with `model=OPENAI_MODEL`, and the OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when constructing its client. No calls to hosted vendors by default.
+The reasoning step calls the OpenAI Python SDK directly, pointed at the user's local OpenAI-compatible endpoint via `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`. The OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when constructing its client. `config.load_config` writes both into `os.environ` before any walker call. No bridge layer.
 
 The server is single-user, local, stdio. No HTTP, no auth, no multi-user concerns. Runtime story: the user has run `scrape.sh` at least once, has `output/by_month/` and `output/likes.json` on disk, has a local OpenAI-compatible endpoint up, and registers `python -m x_likes_mcp` with their MCP client. Then they can ask their like history questions in natural language.
 
-The `search_likes` filter (`year`, `month_start`, `month_end`) is a structured pre-filter, not a prose hint. The server narrows the file set handed to PageIndex before the reasoning walk begins. This is faster (smaller tree) and more reliable (the LLM cannot quietly ignore a date phrased in the prompt) than the prose-only alternative.
+The `search_likes` filter (`year`, `month_start`, `month_end`) is a structured pre-filter, not a prose hint. It narrows the set of months handed to the walker before any LLM call. This is faster (fewer chunks) and more reliable (the LLM cannot quietly ignore a date phrased in the prompt) than the prose-only alternative.
 
 The tree cache lives next to the export and uses mtime-based invalidation. If any `.md` under `output/by_month/` is newer than the cache, rebuild on next startup. That is the whole policy. No manifest, no checksums, no incremental updates.
 
-I am putting all of this in a new top-level package `x_likes_mcp/` rather than a single `mcp_server.py` module. The server has at least four logically separate concerns (config loading, tree cache, PageIndex wrapper, MCP tool surface). A package gives clean import seams and lets each module be tested in isolation.
+## Why this approach (and not PageIndex, embeddings, or a port of twitter/the-algorithm)
 
-This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: drop the per-file h1 (`# X (Twitter) Liked Tweets`) and the export-timestamp line when the formatter is being driven in per-month mode. Without that change every `likes_YYYY-MM.md` looks like a master document and PageIndex sees 131 copies of the same h1, which corrupts the tree shape. With it gone, the `## YYYY-MM` heading becomes the effective top of each per-month file's tree. The change is backward-compatible: the single-file path keeps the boilerplate.
+I sized up three alternatives before landing here.
+
+**PageIndex (the PyPI package, version 0.2.8).** The README sells reasoning-based tree walking, which fits the data shape. The actual package is a thin client for the hosted service at `api.pageindex.ai` — it posts your documents to a third party. Single-user local tool, no third parties. So it is out as a dependency, but the shape it implies (parse to tree, walk with reasoning) is the right shape for this data. I am keeping the shape and writing the three modules myself.
+
+**Embeddings + MMR.** I tried this first on a smaller corpus. Cosine similarity over BGE embeddings finds semantically-near tweets, but on one person's likes the ranking is flat — every other tweet about the same topic scores within a few percent. MMR helps with diversity without fixing the ordering. The conclusion: similarity alone, on an already-curated set, does not produce useful ranking.
+
+**A port of `twitter/the-algorithm`.** The repo is the open-sourced heavy ranker plus all the infrastructure feeding it. Most of that infrastructure (real-graph, SimClusters, TwHIN, the candidate generators, the GraphJet engine) needs Twitter-scale data and Twitter-scale compute. None of it is portable to one person's archive. What is portable is the **feature shape**: a weighted sum of engagement counts (favorite, retweet, reply, view), an author-affinity term, recency decay, plus small boosts for verified authors and tweets with media. Those are the features the heavy ranker uses, and every one of them is already on the `Tweet` objects from Spec 1's loader.
+
+So: walker for "is this plausibly relevant to the question," ranker for "how much should I care about this hit." The walker uses the LLM because relevance judgment is qualitative. The ranker is pure arithmetic because once relevance is decided, ordering by engagement and affinity is deterministic and deterministic is cheaper, faster, and tunable.
 
 ### Goals
 
 - A `python -m x_likes_mcp` invocation on a fresh checkout (after `uv sync` and `scrape.sh`) starts a stdio MCP server with the four tools advertised.
-- All four tools work end-to-end against a fixture export, with the OpenAI SDK call and the PageIndex tree builder mocked. `pytest tests/mcp/` passes with no network and no LLM.
-- `search_likes(query, year=2025, month_start="04", month_end="06")` only sees `likes_2025-04.md`, `likes_2025-05.md`, `likes_2025-06.md` and is roughly an order of magnitude faster than an open-ended call.
-- The server consumes Spec 1's `load_export(path)` and `iter_monthly_markdown(path)` exclusively for export reads. It does not reach into `XLikesExporter` or any module under `x_likes_exporter` other than what `__init__.py` exposes.
-- `MarkdownFormatter.export` produces per-month files without the global h1 when called in per-month mode, and produces them with the h1 in single-file mode. Existing single-file behavior is unchanged.
-- A README section documents `.mcp.json` registration plus the three new `.env` variables.
+- All four tools work end-to-end against a fixture export, with the walker mocked. `pytest tests/mcp/` passes with no network and no real LLM.
+- `search_likes(query, year=2025, month_start="04", month_end="06")` only walks `likes_2025-04.md`, `likes_2025-05.md`, `likes_2025-06.md` — three months of LLM calls, not 26 months.
+- The server consumes Spec 1's `load_export(path)` and `iter_monthly_markdown(path)` exclusively for export reads.
+- A README section documents `.mcp.json` registration, the OpenAI env vars, and the ranker weight env vars.
 
 ### Non-Goals
 
 - HTTP/SSE transport. Stdio only.
 - Re-fetching from X. Read-only over existing exports.
-- A vector store, embeddings, or any retrieval backend other than PageIndex.
+- The PageIndex PyPI package (replaced by our own implementation).
+- Vector embeddings, MMR, BGE-style similarity ranking.
+- Real-graph features, SimClusters, TwHIN, anything that needs Twitter-scale infrastructure.
 - Multi-user, auth, rate limiting, telemetry.
-- Calls to hosted LLM services by default. The user can point `OPENAI_BASE_URL` at a hosted vendor if they want; the server does not.
-- Pre-computing the index in a separate process. Tree build happens in-server on first start (or after invalidation).
-- Live filesystem watching. New `.md` files are picked up on server restart, not at runtime.
-- Tests that exercise a real local LLM. Real-model verification is a manual step documented in the README.
-- Any change to the existing single-file Markdown export shape.
+- Calls to hosted LLM services by default.
+- Pre-computing the index in a separate process.
+- Live filesystem watching. New `.md` files are picked up on server restart.
+- Tests that exercise a real local LLM. Real-model verification is a manual step in the README.
 
 ## Boundary Commitments
 
@@ -43,29 +51,28 @@ This spec also makes one small change to Spec 1's `MarkdownFormatter.export`: dr
 
 - A new top-level Python package `x_likes_mcp/` with the modules described in File Structure Plan.
 - The `python -m x_likes_mcp` entry point (via `x_likes_mcp/__main__.py`).
-- A new `[project.scripts]` entry `x-likes-mcp = "x_likes_mcp.__main__:main"` in `pyproject.toml`.
-- Two new runtime dependencies in `pyproject.toml`: `mcp` (the Python MCP SDK) and `pageindex`. PageIndex pulls in `openai` transitively.
-- The cache file path (`<output_dir>/pageindex_cache.pkl`) and the mtime-based invalidation rule.
-- Three new `.env` variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) and the corresponding entries in `.env.sample`.
+- A `[project.scripts]` entry `x-likes-mcp = "x_likes_mcp.__main__:main"` in `pyproject.toml`.
+- Two runtime dependencies in `pyproject.toml`: `mcp` (the Python MCP SDK) and `openai` (called directly by the walker).
+- The cache file path (`<output_dir>/tweet_tree_cache.pkl`) and the mtime-based invalidation rule.
+- Three OpenAI-compatible `.env` variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`), nine `RANKER_W_*` overrides, one `RANKER_RECENCY_HALFLIFE_DAYS`, and the corresponding entries in `.env.sample`.
 - A README section on registering the server with Claude Code (or any MCP client).
 - Tests under `tests/mcp/` (a subdirectory so they are separable from Spec 1's tests in `tests/`).
-- A narrowly-scoped change to `x_likes_exporter/formatters.py:MarkdownFormatter.export`: a new `omit_global_header: bool = False` keyword argument that suppresses the per-file h1 plus the export-timestamp metadata when set. The exporter passes `omit_global_header=True` from the per-month loop. The single-file callsite passes nothing and therefore preserves existing output verbatim. The corresponding test update in `tests/test_formatters.py` lives in this spec's task plan.
+- The narrowly-scoped change to `x_likes_exporter/formatters.py:MarkdownFormatter.export` already shipped in this spec's task 1.1 (the `omit_global_header` parameter). That task is complete; documenting it here for traceability.
 
 ### Out of Boundary
 
 - Anything else `x_likes_exporter` owns: scraper internals, `Tweet`/`User`/`Media` data models, the loader, other formatters, scraper tests. This spec consumes them through the public read API; it does not modify them.
-- The `output/by_month/` content. The server reads but never writes per-month Markdown or `likes.json`. Re-running `scrape.sh` to refresh the export with the new header shape is a manual step the user does once.
+- The `output/by_month/` content. The server reads but never writes per-month Markdown or `likes.json`.
 - The `cookies.json` file. The server never touches it.
 - HTTP/SSE transport, web UI, multi-user concerns.
-- A separate-process indexer. The server builds the tree itself.
 
 ### Allowed Dependencies
 
-- Spec 1's public read API: `from x_likes_exporter import load_export, iter_monthly_markdown` and the `Tweet` dataclass it returns.
+- Spec 1's public read API: `from x_likes_exporter import load_export, iter_monthly_markdown` and the `Tweet` / `User` / `Media` dataclasses it returns.
 - `mcp` (Python MCP SDK) for the stdio server scaffold and JSON-schema declarations.
-- `pageindex` for tree building and the query-time reasoning step. PageIndex pulls in `openai` transitively; the OpenAI SDK drives the OpenAI-compatible HTTP call.
-- Stdlib only for everything else: `pathlib`, `pickle` (or a JSON variant if PageIndex publishes one) for the cache, `os`/`sys`/`logging`, `re`, `argparse`.
-- A small hand-rolled `.env` loader (no `python-dotenv` dependency) because `scrape.sh` does not currently depend on `python-dotenv` either.
+- `openai` (the OpenAI Python SDK) for the walker's chat-completions call.
+- Stdlib for everything else: `pathlib`, `pickle` for the cache, `os`/`sys`/`logging`, `re`, `argparse`, `math`, `datetime`, `json`.
+- A small hand-rolled `.env` loader (no `python-dotenv` dependency) because `scrape.sh` does not currently depend on it either.
 
 ### Revalidation Triggers
 
@@ -73,15 +80,14 @@ This spec re-checks if Spec 1 changes any of:
 
 - The signature or return type of `load_export(path)`.
 - The signature or return type of `iter_monthly_markdown(path)`.
-- The shape of the `Tweet` dataclass or its `to_dict()` output.
+- The shape of the `Tweet` dataclass or its `to_dict()` output, especially the engagement fields (`favorite_count`, `retweet_count`, `reply_count`, `view_count`), the `created_at` parser contract, and the `User.screen_name` / `User.verified` / `Media` shape.
 - The directory layout under `output/by_month/` (currently `likes_YYYY-MM.md`).
 - The package's top-level exports in `x_likes_exporter/__init__.py`.
-- The `omit_global_header` parameter on `MarkdownFormatter.export` (added by this spec; once added, removing or renaming it would force a re-check here).
 
 Conversely, downstream consumers of this spec (none planned today) would re-check on:
 
-- Tool name, input schema, or output schema of any of the four tools, including the `search_likes` filter fields.
-- The `.env` variable names (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) or the OpenAI SDK env-var contract.
+- Tool name, input schema, or output schema of any of the four tools, including the `search_likes` filter fields and the `ScoredHit` shape.
+- The `.env` variable names or the OpenAI SDK env-var contract.
 - The cache file path or invalidation rule.
 - The console script name (`x-likes-mcp`) or module name (`x_likes_mcp`).
 
@@ -91,9 +97,9 @@ Conversely, downstream consumers of this spec (none planned today) would re-chec
 
 There is no MCP server in the project today. Spec 1 lays the foundation: `x_likes_exporter.loader` exposes `load_export` and `iter_monthly_markdown`, both importable from the package top level, both runnable without a cookies file. This spec is the first consumer of that surface.
 
-The directory layout produced by the existing scraper is fixed: `output/by_month/likes_YYYY-MM.md` plus `output/likes.json`. The Markdown files have `## YYYY-MM` and `### @handle` headings, which is the structure PageIndex's tree builder expects. After this spec lands, those files no longer carry the per-file `# X (Twitter) Liked Tweets` h1 or the export-timestamp line, so the `## YYYY-MM` heading is the effective root of each file's tree.
+The directory layout produced by the existing scraper is fixed: `output/by_month/likes_YYYY-MM.md` plus `output/likes.json`. Per-file h1 has already been dropped (this spec's task 1.1, complete). So `## YYYY-MM` is the effective top of each per-month file and the per-tweet sections start at `### [@handle]`.
 
-The `.sentrux/rules.toml` boundary model puts `x_likes_exporter/loader.py` in the `io` layer (order 2) and forbids it from depending on cookies, auth, client, exporter, or downloader. The new `x_likes_mcp/` package lives at the project top level alongside `x_likes_exporter/`, not inside it, so no sentrux rule applies. The dependency arrow goes one way: `x_likes_mcp` imports from `x_likes_exporter`, never the reverse.
+The `.sentrux/rules.toml` boundary model puts `x_likes_exporter/loader.py` in the `io` layer and forbids it from depending on cookies, auth, client, exporter, or downloader. The new `x_likes_mcp/` package lives at the project top level alongside `x_likes_exporter/`, not inside it, so no sentrux rule applies. The dependency arrow goes one way: `x_likes_mcp` imports from `x_likes_exporter`, never the reverse.
 
 ### Architecture Pattern and Boundary Map
 
@@ -103,19 +109,20 @@ graph TB
         Main[__main__]
         Server[server]
         Tools[tools]
-        Index[index]
+        Index[index TweetIndex]
+        Tree[tree]
+        Walker[walker]
+        Ranker[ranker]
         Config[config]
         Errors[errors]
     end
     subgraph upstream[x_likes_exporter Spec 1 read API]
         Loader[loader]
         Models[models]
-        Formatters[formatters]
     end
     subgraph external[external runtime]
         MCP_SDK[mcp Python SDK]
-        PageIndex_lib[pageindex]
-        OpenAI_SDK[openai SDK transitive]
+        OpenAI_SDK[openai SDK]
         LLM[OpenAI-compatible endpoint]
         Output[output by_month and likes.json]
     end
@@ -127,38 +134,35 @@ graph TB
     Server --> MCP_SDK
     Tools --> Index
     Tools --> Errors
-    Index --> PageIndex_lib
+    Index --> Tree
+    Index --> Walker
+    Index --> Ranker
     Index --> Loader
     Index --> Output
-    PageIndex_lib --> OpenAI_SDK
+    Tree --> Output
+    Walker --> OpenAI_SDK
     OpenAI_SDK --> LLM
     Loader --> Output
     Loader --> Models
-    Formatters --> Models
+    Ranker --> Models
 ```
 
-The pattern is hub-and-spokes. `__main__` is the entry point. `config` parses `.env`. `index` owns the cache file, the PageIndex object, and the in-memory `Tweet` map. `tools` is the four handlers. `server` wires `tools` into the MCP SDK. `errors` is a small module with the tool-error helpers.
+The pattern is hub-and-spokes. `__main__` is the entry point. `config` parses `.env`. `index` (the `TweetIndex` orchestrator) owns the cache file, the `TweetTree`, the in-memory `Tweet` map, and the precomputed `author_affinity` map. `tools` is the four handlers. `server` wires `tools` into the MCP SDK. `errors` is a small module with the tool-error helpers. `tree`, `walker`, `ranker` are the three new purpose-built modules.
 
-Dependency direction inside the package: `errors` and `config` are leaves. `index` depends on `config` and on `x_likes_exporter.loader`. `tools` depends on `index` and `errors`. `server` depends on `tools` and on the MCP SDK. `__main__` depends on `server`, `config`, and `index`.
+Dependency direction inside the package: `errors` and `config` are leaves. `tree` depends on stdlib and on `Tweet`/`Media` shapes (read-only). `ranker` depends on `Tweet` and on `walker.WalkerHit`. `walker` depends on `tree.TreeNode`, the OpenAI SDK, and `config` for the model name. `index` depends on `config`, `x_likes_exporter.loader`, `tree`, `walker`, `ranker`. `tools` depends on `index` and `errors`. `server` depends on `tools` and the MCP SDK. `__main__` depends on `server`, `config`, `index`.
 
-There is no dependency from `x_likes_exporter` to `x_likes_mcp`. The arrow only points one way. The single edit to `x_likes_exporter/formatters.py` is internal to that module; it does not introduce an import of anything in `x_likes_mcp`.
+The walker is the single LLM call site. No other module imports the OpenAI SDK.
 
 ### Technology Stack
 
 | Layer | Choice / Version | Role | Notes |
 |-------|------------------|------|-------|
 | Runtime | Python >= 3.12 | Same as the rest of the project. | No version bump. |
-| MCP transport | `mcp >= 1.0` (Python SDK) | Stdio server, tool registration, JSON schema declarations. | New runtime dep. Stdio-only; HTTP/SSE not used. |
-| Indexing | `pageindex` (pinned at impl time) | Tree builder over Markdown files; query-time reasoning step. | New runtime dep. Calls the OpenAI SDK directly. |
-| LLM transport | `openai` (transitive via PageIndex) | OpenAI-compatible HTTP call from PageIndex's reasoning step. | Reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when constructing the async client. |
-| `.env` parsing | Stdlib (small hand-rolled loader) | Read three env variables on startup. | ~15 lines, tested directly. Avoids adding `python-dotenv`. |
-| Cache | Stdlib `pickle` | Persist the PageIndex tree across restarts. | Single-user, local, never crosses a trust boundary. If PageIndex publishes a JSON or other safer serialization at impl time, prefer that. |
+| MCP transport | `mcp >= 1.0` (Python SDK) | Stdio server, tool registration, JSON schema declarations. | Runtime dep. Stdio-only. |
+| LLM client | `openai >= 1.0` | The walker's chat-completions call. Reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` at client-construction time. | Runtime dep. Direct, not wrapped. |
+| `.env` parsing | Stdlib | Read env on startup. | ~15 lines, tested directly. Avoids `python-dotenv`. |
+| Cache | Stdlib `pickle` | Persist the `TweetTree` across restarts. | Single-user, local, never crosses a trust boundary. |
 | Test runner | `pytest >= 8.0` (already pinned by Spec 1) | Test discovery, fixtures. | Reuse Spec 1's `[dependency-groups].dev`. |
-
-Two notes on dep choices:
-
-1. PageIndex's exact public API will be confirmed at implementation time. The `Index` wrapper exists specifically so swapping PageIndex for an alternative is a contained change.
-2. The OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` at client-construction time. `config.load_config` writes the resolved values into `os.environ` before any PageIndex call so the SDK picks them up when PageIndex's reasoning step instantiates its async client. The user only ever sets the three documented variables.
 
 ## File Structure Plan
 
@@ -170,13 +174,16 @@ x_likes_mcp/
   __main__.py            # Entry point: load config, build index, run stdio loop, exit codes.
   config.py              # Config dataclass + .env reader. Validates OpenAI env vars present.
   errors.py              # ToolError exception + category helpers.
-  index.py               # Index class: build/load tree, cache invalidation, search, lookup.
+  tree.py                # build_tree, TreeNode, TweetTree. Pure-Python markdown parser.
+  walker.py              # walk(tree, query, months_in_scope) -> list[WalkerHit]. The LLM call site.
+  ranker.py              # rank(walker_hits, tweets_by_id, author_affinity, weights, now) -> list[ScoredHit]. Pure function.
+  index.py               # TweetIndex: open_or_build, search, lookup_tweet, list_months, get_month_markdown.
   tools.py               # Four tool handlers: search_likes, list_months, get_month, read_tweet.
   server.py              # MCP SDK wiring: server name, tool registration, run_stdio entry.
 
 tests/mcp/
   __init__.py
-  conftest.py            # Shared fixtures: fake export dir, mock LLM, mock PageIndex, network guard.
+  conftest.py            # Shared fixtures: fake export dir, walker mock, network guard.
   fixtures/
     by_month/
       likes_2025-01.md   # Two tweets, one with media reference, one plain. No global h1.
@@ -184,6 +191,9 @@ tests/mcp/
       likes_2025-03.md   # One tweet. Used to exercise three-month range filtering.
     likes.json           # Matches the by_month content above.
   test_config.py
+  test_tree.py
+  test_walker.py
+  test_ranker.py
   test_index.py
   test_tools.py
   test_server_integration.py
@@ -191,18 +201,21 @@ tests/mcp/
 
 ### Modified files
 
-- `pyproject.toml` — add `mcp` and `pageindex` to `[project.dependencies]`; add `x-likes-mcp = "x_likes_mcp.__main__:main"` to `[project.scripts]`; extend `[tool.hatch.build.targets.wheel].packages` to include `x_likes_mcp`.
-- `.env.sample` — add `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` with comments stating the endpoint is local OpenAI-compatible by default.
+- `pyproject.toml` — drop `pageindex` from `[project.dependencies]`, add `openai>=1.0`. `mcp` stays. Console script and wheel-packages config already in place.
+- `.env.sample` — add the three OpenAI variables and the `RANKER_W_*` plus `RANKER_RECENCY_HALFLIFE_DAYS` lines with comments.
 - `README.md` — add an "MCP Server" section: `.mcp.json` snippet, `claude mcp add` example, the four tools, the `.env` requirements, the prerequisite that `scrape.sh` has been run.
-- `x_likes_exporter/formatters.py` — `MarkdownFormatter.export` gains an `omit_global_header: bool = False` keyword parameter. When `True`, the function skips the four lines that emit `# X (Twitter) Liked Tweets`, the `**Exported:** ...` timestamp line, the `**Total Tweets:** ...` line, and the trailing `---` separator. Everything else (the per-month sections, per-tweet blocks, the file write at the bottom) is unchanged.
-- `x_likes_exporter/exporter.py` — `XLikesExporter.export_markdown` passes `omit_global_header=True` to `formatter.export(...)` inside the per-month loop. The non-split-by-month branch (a single `formatter.export(...)` call near the end) does not pass it, so the single-file output is byte-identical to today.
-- `tests/test_formatters.py` — `test_markdown_formatter_basic` (or a sibling test) gains assertions that the global h1 and export-timestamp line are absent when `omit_global_header=True`, and present when it is omitted. The existing assertions on `## YYYY-MM` / `## Unknown Date` headings, per-tweet blocks, stats line, and reverse-chronological order remain.
+- `x_likes_exporter/formatters.py` — already modified in this spec's task 1.1 (`omit_global_header` parameter). No further change.
+- `x_likes_exporter/exporter.py` — already modified in this spec's task 1.1 (passes `omit_global_header=True` from the per-month branch). No further change.
+- `tests/test_formatters.py` — already updated in this spec's task 1.2. No further change.
 
 Each new module owns one responsibility:
-- `config.py` — read `.env`, validate, expose a frozen dataclass.
-- `errors.py` — convert internal failures to MCP tool errors with a stable shape.
-- `index.py` — build, persist, and query the PageIndex tree; expose tweet lookup; pre-filter file lists.
-- `tools.py` — four tool handlers; each is thin and calls into `index`.
+- `config.py` — read `.env`, validate, expose a frozen dataclass. (Implemented; task 2.1.)
+- `errors.py` — convert internal failures to MCP tool errors with a stable shape. (Implemented; task 2.2.)
+- `tree.py` — parse per-month Markdown into `TweetTree`. Pure I/O + regex.
+- `walker.py` — run the per-month LLM walk. The only LLM call site.
+- `ranker.py` — combine walker hits + features into ranked `ScoredHit` list. Pure function.
+- `index.py` — `TweetIndex` orchestrator. Owns the cache, the Tweet map, `author_affinity`. Calls walker → ranker on `search`.
+- `tools.py` — four tool handlers; each is thin and calls into `TweetIndex`.
 - `server.py` — declare the four tools to the MCP SDK and run the stdio loop.
 - `__main__.py` — argv parsing (none expected for v1), error printing, exit codes.
 
@@ -215,10 +228,9 @@ sequenceDiagram
     participant User
     participant Main as x_likes_mcp.__main__
     participant Config as config
-    participant Index as index
+    participant Index as index TweetIndex
     participant Loader as x_likes_exporter.loader
-    participant PageIndex as pageindex
-    participant OpenAI as openai SDK
+    participant Tree as tree
     participant Server as server
     participant MCP as MCP client
 
@@ -226,21 +238,22 @@ sequenceDiagram
     Main->>Config: load_config()
     Config->>Config: read .env, validate OPENAI_BASE_URL and OPENAI_MODEL
     Config->>Config: write OPENAI_BASE_URL, OPENAI_API_KEY to os.environ
-    Config-->>Main: Config dataclass
+    Config->>Config: parse RANKER_W_* overrides into RankerWeights
+    Config-->>Main: Config dataclass + RankerWeights
     Main->>Index: open_or_build(config)
     Index->>Loader: iter_monthly_markdown(by_month_dir)
     Loader-->>Index: paths
     alt cache fresh
-        Index->>Index: pickle.load(cache_path)
+        Index->>Index: pickle.load(cache_path) -> TweetTree
     else cache stale or missing
-        Index->>PageIndex: build_tree(paths, model=OPENAI_MODEL)
-        PageIndex->>OpenAI: reasoning calls during build
-        OpenAI->>OpenAI: read OPENAI_BASE_URL, OPENAI_API_KEY from os.environ at client construction
-        PageIndex-->>Index: tree + side-table
-        Index->>Index: pickle.dump((tree, side_table), cache_path) atomically
+        Index->>Tree: build_tree(by_month_dir)
+        Tree-->>Index: TweetTree (pure-Python parse)
+        Index->>Index: pickle.dump(tree, cache_path) atomically
     end
     Index->>Loader: load_export(likes_json)
     Loader-->>Index: list of Tweet
+    Index->>Index: build tweets_by_id, paths_by_month
+    Index->>Index: compute_author_affinity(tweets) -> {handle: log1p(count)}
     Index-->>Main: ready
     Main->>Server: run(index)
     Server->>MCP: announce tools
@@ -253,29 +266,33 @@ sequenceDiagram
 sequenceDiagram
     participant Client as MCP client
     participant Tools as tools
-    participant Index as index
-    participant PageIndex as pageindex
+    participant Index as index TweetIndex
+    participant Walker as walker
     participant OpenAI as openai SDK
     participant LLM as OpenAI-compatible endpoint
+    participant Ranker as ranker
 
     Client->>Tools: search_likes(query, year, month_start, month_end)
     Tools->>Tools: validate query non-empty, year/month shape
-    Tools->>Index: search(query, filter)
-    Index->>Index: select cached subtree limited to filter range
-    Index->>PageIndex: query(subtree, query)
-    PageIndex->>OpenAI: reasoning request
-    OpenAI->>LLM: HTTP call to OPENAI_BASE_URL
-    LLM-->>OpenAI: response
-    OpenAI-->>PageIndex: parsed answer
-    PageIndex-->>Index: matches with section refs
-    Index->>Index: map sections to (month, handle, tweet_id, snippet)
-    Index-->>Tools: list of SearchHit
-    Tools-->>Client: JSON list
+    Tools->>Index: search(query, year, month_start, month_end)
+    Index->>Index: _resolve_filter(year, ms, me) -> months_in_scope or None
+    Index->>Walker: walk(tree, query, months_in_scope)
+    loop per month chunk
+        Walker->>OpenAI: chat.completions.create(model, messages)
+        OpenAI->>LLM: HTTP call to OPENAI_BASE_URL
+        LLM-->>OpenAI: JSON [{id, relevance, why}]
+        OpenAI-->>Walker: parsed response
+        Walker->>Walker: drop entries with unknown id or bad relevance
+    end
+    Walker-->>Index: list of WalkerHit
+    Index->>Ranker: rank(walker_hits, tweets_by_id, author_affinity, weights, anchor)
+    Ranker->>Ranker: score each hit, sort descending
+    Ranker-->>Index: list of ScoredHit
+    Index-->>Tools: top-N ScoredHit
+    Tools-->>Client: JSON list with snippet + score + why + feature_breakdown
 ```
 
-The structured-filter step is the place this design adds work over a naive PageIndex pass-through. When the filter is set, `Index.search` selects a subset of the cached tree's children (each child corresponds to one month file) instead of passing the entire tree to PageIndex. If PageIndex's API allows building a query against a subtree, that is the cheap path. If not, the fallback is to keep one tree per month at build time and combine the matching subtrees into an ad-hoc tree at query time. The choice is made at impl time once PageIndex's tree shape is confirmed; both paths give the same observable behavior.
-
-When the filter is unset (`year`, `month_start`, `month_end` all `None`), `Index.search` passes the full tree, which is the original behavior.
+The structured-filter step is the place this design adds work over a naive walk-everything pass. `_resolve_filter` returns either a list of `YYYY-MM` strings or `None` (meaning all months). The walker iterates only those months; if `None`, it iterates every month in `tree.nodes_by_month`.
 
 ### Filter validation
 
@@ -287,115 +304,243 @@ When the filter is unset (`year`, `month_start`, `month_end` all `None`), `Index
 - If only `year` is set (no months), the filter spans the whole year.
 - If `year` and `month_start` are set but `month_end` is not, the filter is the single month `year-month_start`.
 
-These rules keep the schema declarable as four optional fields without an explicit "range" object, and mean `search_likes(query, year=2025)` and `search_likes(query, year=2025, month_start="04", month_end="06")` both read naturally.
+These rules keep the schema declarable as four optional fields without an explicit "range" object.
 
 ### `read_tweet`, `list_months`, `get_month`
 
-These three are file-and-data lookups, no diagram needed. `read_tweet` finds the tweet in the in-memory dict `Index` built from `load_export`. `list_months` scans `iter_monthly_markdown` and pairs each path with a count from the in-memory list. `get_month` reads the file off disk after pattern validation.
+These three are file-and-data lookups, no diagram needed. `read_tweet` finds the tweet in the in-memory dict `TweetIndex` built from `load_export`. `list_months` consults `paths_by_month` and pairs each path with a count from the in-memory list. `get_month` reads the file off disk after pattern validation.
 
 ## Components and Interfaces
 
 | Component | Domain/Layer | Intent | Req Coverage | Key Dependencies | Contracts |
 |-----------|--------------|--------|--------------|------------------|-----------|
-| `config` | Startup | Read `.env`, validate, hand back a `Config` dataclass. Write OpenAI env vars to `os.environ` so the OpenAI SDK picks them up at client-construction time. | 2.1, 2.2, 2.3, 2.4, 2.5, 11.1 | stdlib | Service |
-| `errors` | Cross-cutting | Tool-error shapes, category helpers. | 4.3, 4.4, 6.2, 6.3, 7.3, 7.4, 11.2, 11.4 | stdlib | Service |
-| `index` | Indexing + cache | Build/load PageIndex tree, hold it in memory plus the in-memory `Tweet` dict, expose `search` (with optional filter), `lookup_tweet`, `list_months`, `get_month_markdown`. | 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.5, 7.1, 7.2, 7.3, 8.4, 8.5, 11.3 | `pageindex`, `x_likes_exporter.loader` | Service, State |
-| `tools` | MCP tool handlers | Four functions implementing the tools, each with input validation and error shaping. | 4.1-4.6, 5.1-5.4, 6.1-6.4, 7.1-7.5, 11.4 | `index`, `errors` | Service |
-| `server` | MCP transport | Register tools with the MCP SDK, declare JSON schemas, run stdio loop, convert exceptions to tool errors. | 1.1, 1.3, 4.6, 5.4, 6.4, 7.5 | `mcp` SDK | Service |
-| `__main__` | Entry point | Run startup pipeline, print errors, exit codes. | 1.1, 1.2, 11.1 | `config`, `index`, `server` | Service |
-| `pyproject.toml` change | Project config | Declare new runtime deps and console script. | 1.2, 1.4, 9.6 | n/a | n/a |
-| `.env.sample` change | Project config | Document new env vars. | 2.5 | n/a | n/a |
-| README change | Docs | Registration with Claude Code, tool overview. | 10.1, 10.2, 10.3, 10.4 | n/a | n/a |
-| `MarkdownFormatter.export` change | Spec 1 module touched in this spec | Add `omit_global_header` parameter so per-month files have `## YYYY-MM` as the effective top of the tree. | 3.1 (indirectly: tree shape PageIndex sees) | `models`, `dates`, `downloader` | Service |
+| `config` | Startup | Read `.env`, validate, hand back a `Config` + `RankerWeights`. Write OpenAI env vars to `os.environ`. | 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 13.1 | stdlib | Service |
+| `errors` | Cross-cutting | Tool-error shapes, category helpers. | 6.3, 6.5, 8.2, 8.3, 9.3, 9.4, 13.2, 13.4 | stdlib | Service |
+| `tree` | Parsing | Parse per-month Markdown into `TweetTree`. Pure I/O + regex. | 3.1, 3.6 | stdlib | Service |
+| `walker` | LLM call site | Per-month LLM walk returning `WalkerHit` list. | 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 6.1, 6.6 | `openai` SDK, `tree`, `config` | Service |
+| `ranker` | Ranking | Pure-function weighted combiner. | 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 6.4 | `Tweet`, `walker.WalkerHit` | Service |
+| `index` | Indexing + cache | Build/load `TweetTree`, hold it plus the `Tweet` dict and `author_affinity`, expose `search`, `lookup_tweet`, `list_months`, `get_month_markdown`. | 3.1, 3.2, 3.3, 3.4, 3.5, 6.1, 6.2, 6.7, 9.1, 9.2, 9.3, 10.4, 10.5, 13.3 | `tree`, `walker`, `ranker`, `x_likes_exporter.loader` | Service, State |
+| `tools` | MCP tool handlers | Four functions implementing the tools, each with input validation and error shaping. | 6.1-6.8, 7.1-7.4, 8.1-8.4, 9.1-9.5, 13.4 | `index`, `errors` | Service |
+| `server` | MCP transport | Register tools with the MCP SDK, declare JSON schemas, run stdio loop, convert exceptions. | 1.1, 1.3, 6.6, 6.8, 7.4, 8.4, 9.5 | `mcp` SDK | Service |
+| `__main__` | Entry point | Run startup pipeline, print errors, exit codes. | 1.1, 1.2, 13.1 | `config`, `index`, `server` | Service |
+| `pyproject.toml` change | Project config | Drop `pageindex`, add `openai`. | 1.4, 11.6 | n/a | n/a |
+| `.env.sample` change | Project config | Document env vars (OpenAI + ranker weights). | 2.7 | n/a | n/a |
+| README change | Docs | Registration with Claude Code, tool overview. | 12.1, 12.2, 12.3, 12.4 | n/a | n/a |
 
 ### Startup Layer
 
 #### `config`
 
+Already implemented in task 2.1. The dataclass and loader are in `x_likes_mcp/config.py`. This spec extends it with ranker-weight parsing.
+
 | Field | Detail |
 |-------|--------|
-| Intent | Read `.env`, validate the required variables, return a frozen `Config`, and propagate the OpenAI env vars into `os.environ` so the OpenAI SDK picks them up at client-construction time. |
-| Requirements | 2.1, 2.2, 2.3, 2.4, 2.5, 11.1 |
+| Intent | Read `.env`, validate the required variables, return a frozen `Config` + `RankerWeights`, propagate the OpenAI env vars into `os.environ`. |
+| Requirements | 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 13.1 |
 
-**Responsibilities and constraints**
-- Reads `.env` from the project root (cwd at server startup) if present; otherwise reads from `os.environ` only.
-- Validates `OPENAI_BASE_URL` is set and non-empty. Validates `OPENAI_MODEL` is set and non-empty. Raises `ConfigError` with a message naming the missing variable otherwise.
-- `OPENAI_API_KEY` is optional; some local endpoints do not check it. Empty string and `None` are both acceptable.
-- Defaults `OUTPUT_DIR` to `output` if absent.
-- Returns a `Config` dataclass with `output_dir: Path`, `by_month_dir: Path`, `likes_json: Path`, `cache_path: Path`, `openai_base_url: str`, `openai_api_key: str | None`, `openai_model: str`.
-- Side effect: `load_config` writes the resolved `OPENAI_BASE_URL` and `OPENAI_API_KEY` (when set) into `os.environ` before returning. The OpenAI SDK reads those variables from `os.environ` at the moment PageIndex's reasoning step instantiates its async client. The `.env` file is the source of truth; `os.environ` is the handoff.
+**Service interface (extension)**
+
+```python
+# x_likes_mcp/config.py — additive
+
+@dataclass(frozen=True)
+class RankerWeights:
+    relevance: float = 10.0
+    favorite: float = 2.0
+    retweet: float = 2.5
+    reply: float = 1.0
+    view: float = 0.5
+    affinity: float = 3.0
+    recency: float = 1.5
+    verified: float = 0.5
+    media: float = 0.3
+    recency_halflife_days: float = 180.0
+
+def load_ranker_weights(env: dict[str, str]) -> RankerWeights: ...
+```
+
+`load_ranker_weights` reads `RANKER_W_RELEVANCE`, `RANKER_W_FAVORITE`, `RANKER_W_RETWEET`, `RANKER_W_REPLY`, `RANKER_W_VIEW`, `RANKER_W_AFFINITY`, `RANKER_W_RECENCY`, `RANKER_W_VERIFIED`, `RANKER_W_MEDIA`, and `RANKER_RECENCY_HALFLIFE_DAYS`. Missing keys fall back to defaults. Non-numeric values raise `ConfigError` naming the variable (Requirement 2.6, 13.1). `load_config` returns `(Config, RankerWeights)` after this change, or callers fetch `RankerWeights` separately — implementer's choice as long as both reach `TweetIndex.open_or_build`.
+
+### Parsing Layer
+
+#### `tree`
+
+| Field | Detail |
+|-------|--------|
+| Intent | Parse per-month Markdown into a `TweetTree` keyed by month with per-tweet `TreeNode` entries. Pure-Python; no LLM, no network. |
+| Requirements | 3.1, 3.6 |
 
 **Service interface**
 
 ```python
-# x_likes_mcp/config.py
+# x_likes_mcp/tree.py
 from dataclasses import dataclass
 from pathlib import Path
 
 @dataclass(frozen=True)
-class Config:
-    output_dir: Path
-    by_month_dir: Path
-    likes_json: Path
-    cache_path: Path
-    openai_base_url: str
-    openai_api_key: str | None
-    openai_model: str
+class TreeNode:
+    year_month: str       # "2026-04"
+    tweet_id: str         # extracted from the canonical View on X link
+    handle: str           # from the @handle heading
+    text: str             # the tweet body text (after the heading, before the link line)
+    raw_section: str      # full markdown of this tweet section, for snippet generation
 
-class ConfigError(Exception):
-    pass
+@dataclass(frozen=True)
+class TweetTree:
+    nodes_by_month: dict[str, list[TreeNode]]  # month -> ordered list (chronological within file)
+    nodes_by_id:    dict[str, TreeNode]        # tweet_id -> node, for cheap lookup
 
-def load_config(env_path: Path | None = None, env: dict[str, str] | None = None) -> Config: ...
+def build_tree(by_month_dir: Path) -> TweetTree: ...
 ```
 
-- Preconditions: none. Both arguments default to the project layout; `env` lets tests skip the file read.
-- Postconditions: returns a fully populated `Config` or raises `ConfigError`. `OPENAI_BASE_URL` and `OPENAI_API_KEY` (when set) are present in `os.environ` after a successful return.
-- Invariants: `Config` is frozen.
+**Responsibilities and constraints**
+- Walks `by_month_dir` for files matching `likes_YYYY-MM.md`. Sorted by month string; mtime is for cache freshness, not for in-tree ordering.
+- For each file, splits on `### ` headings (the per-tweet sections after the file's `## YYYY-MM` heading). Each section is one `TreeNode`.
+- Extracts `tweet_id` via regex from the link line `🔗 [View on X](https://x.com/{handle}/status/{id})`. If no link is found (deleted tweet, malformed), the section is skipped with a single stderr log line (do not raise).
+- Extracts `handle` from the section heading `### [@handle]` (or `### @handle` if the bracket form is absent). Falls back to the link-line handle if the heading parse fails.
+- `text` is the markdown body of the section minus the heading, link line, and any obvious metadata lines (the implementation details are deferred to impl time; the test fixtures will pin the expected behavior).
+- `raw_section` is the unmodified text of the section (heading included), so `tools.search_likes` can use it for snippets.
+- Pure function: same input directory yields the same `TweetTree` instance up to dataclass equality.
 
-**Implementation notes**
-- The `.env` reader is stdlib: split lines, strip comments, parse `KEY=VALUE`, no shell quoting. `python-dotenv` is not added as a dep for three variables.
-- `cache_path` is `output_dir / "pageindex_cache.pkl"`.
-- The OpenAI SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ` when its client is constructed. `config.load_config` writes both into `os.environ` before any PageIndex call so the SDK picks them up directly. There is no protocol bridge to translate.
+### LLM Layer
 
-### Indexing Layer
-
-#### `index`
+#### `walker`
 
 | Field | Detail |
 |-------|--------|
-| Intent | Build or load the PageIndex tree, hold it plus the in-memory `Tweet` map, expose `search` (with optional structured filter), `lookup_tweet`, `list_months`, `get_month_markdown`. |
-| Requirements | 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.5, 7.1, 7.2, 7.3, 8.4, 8.5, 11.3 |
+| Intent | Per-month LLM walk. Issues one chat-completions call per chunk of N tweets. Returns `WalkerHit` list across all chunks. The single LLM call site in this spec. |
+| Requirements | 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 6.1, 6.6 |
+
+**Service interface**
+
+```python
+# x_likes_mcp/walker.py
+from dataclasses import dataclass
+from .tree import TweetTree
+from .config import Config
+
+@dataclass(frozen=True)
+class WalkerHit:
+    tweet_id: str
+    relevance: float   # in [0, 1]
+    why: str           # short snippet from the model
+
+def walk(
+    tree: TweetTree,
+    query: str,
+    months_in_scope: list[str] | None,
+    config: Config,
+    chunk_size: int = 30,
+) -> list[WalkerHit]: ...
+```
 
 **Responsibilities and constraints**
-- On `open_or_build(config)`:
-  1. Call `iter_monthly_markdown(config.by_month_dir)` to enumerate `.md` files. If the iterator yields nothing or the directory is missing, raise `IndexError("output/by_month/ is empty or missing")`.
-  2. Compute `newest_md_mtime = max(p.stat().st_mtime for p in paths)`.
-  3. If `config.cache_path` exists and `cache_path.stat().st_mtime >= newest_md_mtime`, load `(tree, side_table)` via `pickle.load`.
-  4. Otherwise, build a fresh `(tree, side_table)` by calling `_build_tree(paths, config.openai_model)`, then `pickle.dump` to a `.tmp` and `os.replace` onto `cache_path`.
-  5. Call `load_export(config.likes_json)` and store the result as a `dict[str, Tweet]` keyed on `tweet.id`. Also retain the original `list[Tweet]` for `list_months` counts.
-- `search(query, year=None, month_start=None, month_end=None) -> list[SearchHit]`:
-  1. Resolve the filter to a list of `YYYY-MM` strings or `None` for unfiltered.
-  2. If filtered, narrow the tree to the matching subtrees (or rebuild an ad-hoc tree from per-month subtrees, whichever PageIndex's API supports).
-  3. Pass the (sub)tree and the query to PageIndex's query entry point.
-  4. Map each match through the side-table to a `SearchHit`. Return `[]` when no matches.
-- `lookup_tweet(tweet_id) -> Tweet | None`: dict lookup.
-- `list_months() -> list[MonthInfo]`: derive months from `iter_monthly_markdown`, parse `YYYY-MM` from each filename, group the in-memory tweet list by `Tweet.get_created_datetime()` for counts, return reverse-chronological.
-- `get_month_markdown(year_month) -> str | None`: read `by_month_dir / f"likes_{year_month}.md"` if it exists, else `None`.
+- If `months_in_scope is None`, walk every month in `tree.nodes_by_month`. Otherwise walk only the listed months (in their natural order — month string ascending).
+- For each month, partition `tree.nodes_by_month[month]` into chunks of `chunk_size`. For each chunk, build the user prompt by listing each tweet as `[id={tweet_id}] @{handle}: {text}` (one per line, truncated if long), and ask the model to return a JSON array of `{id, relevance, why}` objects for plausibly-relevant tweets only.
+- Constructs the OpenAI client at the top of `walk` (or once per chunk — implementer's choice; the SDK is cheap to construct). The SDK reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` from `os.environ`, which `config.load_config` already wrote.
+- Calls `client.chat.completions.create(model=config.openai_model, messages=[...], response_format={"type": "json_object"})` if the local model supports JSON mode; otherwise the prompt asks for raw JSON and the walker parses tolerantly. Implementer's call.
+- Parses the JSON. Drops entries whose `id` is not in the chunk it sent. Drops entries whose `relevance` is not a finite float in `[0, 1]`. Truncates `why` to a reasonable length (e.g. 240 chars).
+- On a per-chunk LLM failure, the walker raises `WalkerError(detail)` (a `RuntimeError` subclass). `tools.search_likes` translates that to `errors.upstream_failure`.
+- Returns the accumulated `WalkerHit` list. Order is the order chunks were processed (months ascending, within-month chunks in order). The ranker resorts by score.
+
+**Implementation notes**
+- The default `chunk_size = 30` is a balance: small enough to fit comfortably in the model's context with the prompt overhead, large enough to keep the number of calls manageable.
+- The prompt template is small. It emphasizes that the model should include indirect/thematic relevance, not just literal keyword matches, and should skip irrelevant tweets entirely (rather than emit them with `relevance: 0`).
+- The walker is the test-mock seam. Tests replace `walker.walk` (or the underlying chat-completions helper) with a function that returns canned `WalkerHit` lists. No HTTP gets made.
+
+### Ranking Layer
+
+#### `ranker`
+
+| Field | Detail |
+|-------|--------|
+| Intent | Pure-function weighted combiner over walker hits. Heavy-ranker-feature-shape, not a port. |
+| Requirements | 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 6.4 |
+
+**Service interface**
+
+```python
+# x_likes_mcp/ranker.py
+from dataclasses import dataclass
+from datetime import datetime
+from collections import Counter
+import math
+from x_likes_exporter import Tweet
+from .walker import WalkerHit
+from .config import RankerWeights
+
+@dataclass(frozen=True)
+class ScoredHit:
+    tweet_id: str
+    score: float
+    walker_relevance: float
+    why: str
+    feature_breakdown: dict[str, float]  # for explainability
+
+def compute_author_affinity(tweets: list[Tweet]) -> dict[str, float]: ...
+
+def rank(
+    walker_hits: list[WalkerHit],
+    tweets_by_id: dict[str, Tweet],
+    author_affinity: dict[str, float],
+    weights: RankerWeights,
+    anchor: datetime,
+) -> list[ScoredHit]: ...
+```
+
+**The score formula**
+
+```
+score = walker_relevance         * W_RELEVANCE
+      + log1p(favorite_count)    * W_FAVORITE
+      + log1p(retweet_count)     * W_RETWEET
+      + log1p(reply_count)       * W_REPLY
+      + log1p(view_count)        * W_VIEW
+      + author_affinity[handle]  * W_AFFINITY
+      + recency_decay(created_at, anchor) * W_RECENCY
+      + (1 if user.verified else 0) * W_VERIFIED
+      + (1 if media else 0)      * W_MEDIA
+```
+
+`recency_decay(created_at, anchor) = exp(-days_apart / halflife_days)` where `days_apart = max(0, (anchor - created_at).total_seconds() / 86400)`.
+
+`compute_author_affinity` produces `{screen_name: log1p(count)}` over the loaded `Tweet` list using `collections.Counter`. Authors not in the map contribute 0.
+
+**Responsibilities and constraints**
+- Pure: same `(walker_hits, tweets_by_id, author_affinity, weights, anchor)` tuple yields the same `[ScoredHit, ...]` list.
+- No I/O, no LLM, no network.
+- Skips `WalkerHit` entries whose `tweet_id` is not in `tweets_by_id` (do not raise). The walker has already filtered to known IDs but defending here is cheap.
+- Skips entries where `Tweet.get_created_datetime()` raises (unparseable `created_at`); recency contribution would be undefined. Logs once to stderr with the tweet ID. The remaining features still contribute and the tweet is still ranked, with the recency term set to zero. Implementer's call: skip vs include-with-zero-recency. Either is acceptable as long as tests pin behavior.
+- `feature_breakdown` is a `dict[str, float]` with keys `relevance`, `favorite`, `retweet`, `reply`, `view`, `affinity`, `recency`, `verified`, `media`. Each value is `feature_value * weight` so the sum equals `score`.
+- Sort by `score` descending; ties broken by `walker_relevance` descending, then `tweet_id` ascending for determinism.
+
+**Why the formula**
+
+Engagement counts get `log1p` because raw counts span six orders of magnitude on this corpus and the linear contribution would let one viral tweet dominate. Author affinity is also `log1p` over how often the user liked this author (`compute_author_affinity`), which lets favorite authors get a stable boost without one-shot authors getting penalized. Recency decay with a 180-day half-life means tweets from a year ago contribute about 25% of the recency weight a tweet from today gets. Verified and media are flat 0/1 boosts because they are flag-shaped, not magnitude-shaped.
+
+The weights ship with defaults that prioritize walker relevance (10.0, the largest) but let strong engagement and high author affinity move tweets up the list when relevance scores are similar. Tunable from `.env`.
+
+### Indexing Layer
+
+#### `index` (TweetIndex)
+
+| Field | Detail |
+|-------|--------|
+| Intent | Build or load the `TweetTree`, hold it plus the in-memory `Tweet` map and `author_affinity`, expose `search`, `lookup_tweet`, `list_months`, `get_month_markdown`. |
+| Requirements | 3.1, 3.2, 3.3, 3.4, 3.5, 6.1, 6.2, 6.7, 9.1, 9.2, 9.3, 10.4, 10.5, 13.3 |
 
 **Service interface**
 
 ```python
 # x_likes_mcp/index.py
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from x_likes_exporter import Tweet
-
-@dataclass(frozen=True)
-class SearchHit:
-    tweet_id: str
-    year_month: str
-    handle: str
-    snippet: str
+from .config import Config, RankerWeights
+from .tree import TweetTree
+from .walker import WalkerHit
+from .ranker import ScoredHit
 
 @dataclass(frozen=True)
 class MonthInfo:
@@ -406,33 +551,47 @@ class MonthInfo:
 class IndexError(Exception):
     pass
 
-class Index:
+class TweetIndex:
     @classmethod
-    def open_or_build(cls, config: "Config") -> "Index": ...
+    def open_or_build(cls, config: Config, weights: RankerWeights) -> "TweetIndex": ...
     def search(
         self,
         query: str,
         year: int | None = None,
         month_start: str | None = None,
         month_end: str | None = None,
-    ) -> list[SearchHit]: ...
+        top_n: int = 50,
+    ) -> list[ScoredHit]: ...
     def lookup_tweet(self, tweet_id: str) -> Tweet | None: ...
     def list_months(self) -> list[MonthInfo]: ...
     def get_month_markdown(self, year_month: str) -> str | None: ...
 ```
 
-- Preconditions for `open_or_build`: `config.by_month_dir` exists, contains at least one `likes_YYYY-MM.md`, and `config.likes_json` exists.
-- Postconditions: returns an `Index` whose methods all work without further setup.
-- Invariants: `Index` is read-only after construction; methods do not mutate the tree or the tweet map.
+**Responsibilities and constraints**
+- On `open_or_build(config, weights)`:
+  1. Call `iter_monthly_markdown(config.by_month_dir)` to enumerate `.md` files. If empty or missing, raise `IndexError("output/by_month/ is empty or missing")`.
+  2. Compute `newest_md_mtime = max(p.stat().st_mtime for p in paths)`.
+  3. If `config.cache_path` exists and `cache_path.stat().st_mtime >= newest_md_mtime`, load `TweetTree` via `pickle.load`.
+  4. Otherwise, build a fresh `TweetTree` via `tree.build_tree(config.by_month_dir)`, then `pickle.dump` to a `.tmp` and `os.replace` onto `cache_path`.
+  5. Call `load_export(config.likes_json)`, build `tweets_by_id: dict[str, Tweet]` keyed on `tweet.id`. Retain the `list[Tweet]` for `list_months` counts.
+  6. Build `paths_by_month: dict[str, Path]` from filenames.
+  7. Compute `author_affinity = ranker.compute_author_affinity(tweets)`.
+- `search(query, year, month_start, month_end, top_n)`:
+  1. Resolve the filter: `_resolve_filter(year, month_start, month_end) -> list[str] | None`. Raises `ValueError` on invalid combinations; `tools.search_likes` translates to `invalid_input`.
+  2. Compute the recency anchor: end of `month_end` if set, end of `month_start`'s month if `month_start` set without `month_end`, end of `year` if only `year` set, `datetime.now(timezone.utc)` otherwise.
+  3. Call `walker.walk(self._tree, query, months_in_scope, self._config)`.
+  4. Call `ranker.rank(walker_hits, self._tweets_by_id, self._author_affinity, self._weights, anchor)`.
+  5. Return the first `top_n` `ScoredHit`s.
+  6. Walker exceptions propagate; `tools.search_likes` shapes them.
+- `lookup_tweet(tweet_id)`: dict lookup. `None` when missing.
+- `list_months()`: derive months from `paths_by_month`, group the in-memory tweet list by `Tweet.get_created_datetime()` for counts (skip tweets with unparseable `created_at`), return reverse-chronological `MonthInfo` list.
+- `get_month_markdown(year_month)`: read `by_month_dir / f"likes_{year_month}.md"` if exists, else `None`.
+- `_resolve_filter(year, month_start, month_end) -> list[str] | None`: enforces the rules in System Flows. Returns `None` when the filter is fully unset; otherwise a list of `YYYY-MM` strings.
 
 **Implementation notes**
-- The PageIndex call is wrapped in a single private method `_build_tree(paths, model)`. The wrapper takes a list of paths and the OpenAI model name, returns `(tree, side_table)`, and has zero other responsibilities. This is the seam tests mock at the unit-test layer.
-- The query call is wrapped in `_query(tree_or_subtree, query) -> list[<pageindex match>]`. The unit tests mock this wrapper, not PageIndex itself.
-- The side-table maps each leaf section in the tree to a `tweet_id` via heading text matching. If a heading cannot be matched (e.g. handle missing for a deleted tweet), the entry is skipped; `search` returns the snippet without a `tweet_id`. Requirement 4.2 is satisfied even with skipped leaves: the result list includes the rest.
-- Cache invalidation is mtime-only. The cache file is rewritten atomically (write `.tmp`, then `os.replace`) so a crash mid-write does not corrupt the cache.
-- `list_months` derives `tweet_count` by grouping the in-memory tweet list by month using `Tweet.get_created_datetime()`. Tweets with unparseable `created_at` are skipped from counts (consistent with how the formatter buckets them under `unknown`). If counts cannot be derived, `tweet_count` is `None` (Requirement 5.3 explicitly allows this).
-- `get_month_markdown` is a one-liner: `(self._by_month_dir / f"likes_{year_month}.md").read_text()` when the file exists, else `None`. The pattern check stays in `tools` so `Index` does not need to know about user input shape.
-- The structured filter resolution is its own helper: `_resolve_filter(year, month_start, month_end) -> list[str] | None`. It returns `None` when no filter applies and a list of `YYYY-MM` strings otherwise. The helper's behavior is the rules listed in the System Flows "Filter validation" subsection. Validation errors raise `ValueError`; `tools.search_likes` catches that and converts to `invalid_input`.
+- The cache file is rewritten atomically (write `.tmp`, `os.replace`).
+- `list_months` derives `tweet_count` by grouping tweets by month using `Tweet.get_created_datetime()`. Tweets with unparseable `created_at` are skipped from counts.
+- `_resolve_filter` errors raise `ValueError` with messages identifying the offending field. The tools layer catches and converts.
 
 ### Tool Handlers
 
@@ -440,66 +599,39 @@ class Index:
 
 | Field | Detail |
 |-------|--------|
-| Intent | Four MCP tool handlers. Each validates input, calls into `Index`, shapes the response. |
-| Requirements | 4.1-4.6, 5.1-5.4, 6.1-6.4, 7.1-7.5, 11.4 |
-
-**Responsibilities and constraints**
-- Each handler is a single function that takes typed arguments (the parsed MCP tool arguments) and returns a JSON-serializable shape.
-- Input validation lives here, not in `Index`. Pattern checks (`^\d{4}-\d{2}$` for `year_month`, `^(0[1-9]|1[0-2])$` for `month_start` / `month_end`, integer in valid year range, non-empty trimmed string for `query`, numeric string for `tweet_id`) raise `ToolError` from `errors.py`.
-- The MCP SDK's tool-call dispatcher catches `ToolError` and returns a tool-error response. Other exceptions are caught at the boundary in `server.py` and converted to a generic upstream-failure tool error so the server does not crash.
+| Intent | Four MCP tool handlers. Each validates input, calls into `TweetIndex`, shapes the response. |
+| Requirements | 6.1-6.8, 7.1-7.4, 8.1-8.4, 9.1-9.5, 13.4 |
 
 **Service interface**
 
 ```python
 # x_likes_mcp/tools.py
-from .index import Index, SearchHit, MonthInfo
+from .index import TweetIndex
+from .ranker import ScoredHit
 
 def search_likes(
-    index: Index,
+    index: TweetIndex,
     query: str,
     year: int | None = None,
     month_start: str | None = None,
     month_end: str | None = None,
 ) -> list[dict]: ...
 
-def list_months(index: Index) -> list[dict]: ...
-def get_month(index: Index, year_month: str) -> str: ...
-def read_tweet(index: Index, tweet_id: str) -> dict: ...
+def list_months(index: TweetIndex) -> list[dict]: ...
+def get_month(index: TweetIndex, year_month: str) -> str: ...
+def read_tweet(index: TweetIndex, tweet_id: str) -> dict: ...
 ```
 
-- Preconditions: `index` is a built `Index`. Arguments are whatever MCP delivered.
-- Postconditions: each handler returns a JSON-serializable shape that matches the declared output schema.
-- Invariants: handlers do not mutate `index`.
-
 **Implementation notes**
-- `search_likes` returns `[{"tweet_id": "...", "year_month": "...", "handle": "...", "snippet": "..."}, ...]`. Filter validation runs first; query validation second. A `ValueError` from `Index._resolve_filter` becomes `errors.invalid_input("filter", ...)`. A `RuntimeError` or any non-`ToolError` exception from `index.search` becomes `errors.upstream_failure(...)` so an OpenAI SDK or network failure surfaces as a tool error, not a server crash.
-- `list_months` returns `[{"year_month": "...", "path": "...", "tweet_count": N}, ...]` in reverse chronological order. `tweet_count` may be `null`.
+- `search_likes` returns `[{"tweet_id", "year_month", "handle", "snippet", "score", "walker_relevance", "why", "feature_breakdown"}, ...]`. The snippet is drawn from the loaded `Tweet.full_text` (or the `text` field as Spec 1's `Tweet` exposes it), truncated to ~240 chars. `year_month` is derived from the tweet's `created_at` if parseable, otherwise from the `TreeNode.year_month` of the matching tree node, otherwise omitted.
+- Filter validation runs first; query validation second. A `ValueError` from `_resolve_filter` becomes `errors.invalid_input("filter", ...)`. Any non-`ToolError` exception from `index.search` (notably the walker's `WalkerError`) becomes `errors.upstream_failure(...)`.
+- `list_months` returns `[{"year_month", "path", "tweet_count"}, ...]` reverse-chronologically. `tweet_count` may be `null`.
 - `get_month` returns the raw Markdown string. The MCP SDK's `TextContent` wrapping happens in `server.py`.
-- `read_tweet` returns `{"tweet_id", "handle", "display_name", "text", "created_at", "view_count", "like_count", "retweet_count", "url"}`. Fields the source `Tweet` does not have are omitted, not nulled.
+- `read_tweet` returns `{"tweet_id", "handle", "display_name", "text", "created_at", "view_count", "like_count", "retweet_count", "url"}`. Fields the source `Tweet` does not have are omitted.
 
 ### Errors Layer
 
-#### `errors`
-
-| Field | Detail |
-|-------|--------|
-| Intent | One exception class for tool-level failures plus helpers for the three error categories. |
-| Requirements | 4.3, 4.4, 6.2, 6.3, 7.3, 7.4, 11.2, 11.4 |
-
-**Service interface**
-
-```python
-# x_likes_mcp/errors.py
-
-class ToolError(Exception):
-    def __init__(self, category: str, message: str): ...
-
-def invalid_input(field: str, message: str) -> ToolError: ...
-def not_found(what: str, identifier: str) -> ToolError: ...
-def upstream_failure(detail: str) -> ToolError: ...
-```
-
-- The three categories are `"invalid_input"`, `"not_found"`, `"upstream_failure"`. They appear in the MCP error response so the calling LLM has enough context to react.
+Already implemented in task 2.2. `ToolError` plus `invalid_input`, `not_found`, `upstream_failure` factories in `x_likes_mcp/errors.py`. No changes.
 
 ### MCP Transport Layer
 
@@ -508,17 +640,14 @@ def upstream_failure(detail: str) -> ToolError: ...
 | Field | Detail |
 |-------|--------|
 | Intent | Wire `tools` into the MCP SDK with JSON schemas, run the stdio loop, convert exceptions. |
-| Requirements | 1.1, 1.3, 4.6, 5.4, 6.4, 7.5 |
-
-**Responsibilities and constraints**
-- Construct an MCP `Server` instance with name `"x-likes-mcp"` and version pulled from `x_likes_mcp.__version__`.
-- Register the four tools with their input/output JSON schemas. Schemas are declared inline as Python dicts. `search_likes` declares `query` as required string, `year` as optional integer with min/max, `month_start` and `month_end` as optional strings with `pattern: "^(0[1-9]|1[0-2])$"`. `get_month` declares `year_month` as required string with `pattern: "^\\d{4}-\\d{2}$"`. `read_tweet` declares `tweet_id` as required string with `pattern: "^\\d+$"`.
-- Catch `ToolError` from the handlers and convert to MCP error responses. Catch other exceptions at the boundary, log to stderr, and return a generic upstream-failure tool error so the process stays alive (Requirement 11.2).
-- Run the SDK's stdio entry point.
+| Requirements | 1.1, 1.3, 6.6, 6.8, 7.4, 8.4, 9.5 |
 
 **Implementation notes**
-- The `Server` instance is constructed once in `server.build_server(index)` and the entry point is `server.run(index)` which calls the SDK's stdio runner. `__main__.main` calls `run(index)` after `Index.open_or_build` returns.
-- The exact MCP SDK API (decorator vs. method registration) will be confirmed at impl time. The contract is "four tools registered, JSON schemas declared, stdio loop runs."
+- Construct an MCP `Server` instance with name `"x-likes-mcp"` and version pulled from `x_likes_mcp.__version__`.
+- Register the four tools with their input/output JSON schemas. `search_likes` declares `query` required string, `year` optional integer with min 2006 and max equal to current year, `month_start` and `month_end` optional strings with `pattern: "^(0[1-9]|1[0-2])$"`. The output schema reflects the `ScoredHit` shape (tweet_id, year_month, handle, snippet, score, walker_relevance, why, feature_breakdown).
+- `get_month` declares `year_month` required string with `pattern: "^\\d{4}-\\d{2}$"`. `read_tweet` declares `tweet_id` required string with `pattern: "^\\d+$"`.
+- Catch `ToolError` from the handlers and convert to MCP error responses. Catch other exceptions at the boundary, log to stderr, return a generic upstream-failure tool error so the process stays alive.
+- Run the SDK's stdio entry point.
 
 ### Entry Point
 
@@ -527,41 +656,20 @@ def upstream_failure(detail: str) -> ToolError: ...
 | Field | Detail |
 |-------|--------|
 | Intent | Startup pipeline, exit codes. |
-| Requirements | 1.1, 1.2, 11.1 |
+| Requirements | 1.1, 1.2, 13.1 |
 
 **Implementation notes**
 - `def main() -> int:` returns `0` on clean shutdown, non-zero on startup failure. Exposed as the `[project.scripts]` target.
 - `if __name__ == "__main__": sys.exit(main())` at the bottom so `python -m x_likes_mcp` works.
-- Startup failures (`ConfigError`, `IndexError`, `FileNotFoundError` on `likes.json`) are caught at the top of `main`, printed to stderr in a single line, and `main` returns `2`. Successful startup runs the SDK stdio loop until disconnect.
-
-### Spec 1 Module Touched: `MarkdownFormatter.export`
-
-The change is small and lives entirely inside `x_likes_exporter/formatters.py`. Today the body of `MarkdownFormatter.export` does:
-
-```python
-md_lines.append("# X (Twitter) Liked Tweets\n")
-md_lines.append(f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-md_lines.append(f"**Total Tweets:** {len(tweets)}\n")
-md_lines.append("---\n")
-```
-
-After the change, those four `append` calls run inside an `if not omit_global_header:` block. The signature becomes `def export(self, tweets, output_file, include_media=True, omit_global_header=False)`. Default behavior is byte-identical to today.
-
-The exporter side (`XLikesExporter.export_markdown`, the per-month branch around line 222) passes `omit_global_header=True` to `formatter.export(...)`. The non-split branch passes nothing.
-
-`tests/test_formatters.py` gets two assertion updates: one test asserts the global h1 and the `**Exported:**` line are present when `omit_global_header` is omitted; another test asserts they are absent when `omit_global_header=True`. Neither test exists today as a dedicated case, so this is additive within the existing test file.
-
-Why this change lives in this spec: PageIndex's tree quality depends on the per-month files not all sharing a top-level h1. The justification is purely indexing-driven, not a Spec 1 quality concern. Filing it back to Spec 1 would require re-opening that spec's task list; doing it here keeps the change small and ships with its consumer.
-
-Why the change is safe: the parameter is keyword-only-by-position and defaults to `False`. Any existing caller of `MarkdownFormatter.export` keeps current behavior. Spec 1's tests for the basic and unknown-routing cases continue to pass on default arguments. The new assertions in `tests/test_formatters.py` cover both sides of the parameter.
+- Startup failures (`ConfigError`, `IndexError`, `FileNotFoundError` on `likes.json`) are caught at the top of `main`, printed to stderr in a single line, `main` returns `2`. Successful startup runs the SDK stdio loop until disconnect.
 
 ## Data Models
 
-This spec does not own any persistent data models. It consumes Spec 1's `Tweet` dataclass as the in-memory representation.
+This spec does not own any persistent data models on disk other than the cache file. It consumes Spec 1's `Tweet`, `User`, `Media` dataclasses as the in-memory representation.
 
-The two new dataclasses (`SearchHit`, `MonthInfo`) are the wire shape of two of the four tool responses. Their fields map directly to the JSON schema declared in `server.py`.
+The new dataclasses (`TreeNode`, `TweetTree`, `WalkerHit`, `ScoredHit`, `MonthInfo`, `RankerWeights`) are all in-memory shapes. `ScoredHit` and `MonthInfo` map to JSON for tool responses; the others are internal.
 
-The cache file is a pickled tuple `(tree, side_table)`. The exact `tree` shape is determined by PageIndex; `side_table` is a `dict[<pageindex node key>, str]` mapping leaves to `tweet.id`.
+The cache file is a pickled `TweetTree`. Single-user, local, never crosses a trust boundary.
 
 ## Requirements Traceability
 
@@ -576,130 +684,125 @@ The cache file is a pickled tuple `(tree, side_table)`. The exact `tree` shape i
 | 2.2 | `OUTPUT_DIR` from `.env` (default `output`). | `config` | `load_config` | Startup |
 | 2.3 | Missing required env vars exits with named error. | `config`, `__main__` | validation | Startup |
 | 2.4 | Local OpenAI-compatible endpoint, no hosted by default. | `config`, README | `load_config` + docs | n/a |
-| 2.5 | `.env.sample` documents new vars. | `.env.sample` | file change | n/a |
-| 3.1 | First start builds and caches PageIndex tree. | `index` | `open_or_build` | Startup |
+| 2.5 | OPENAI_* env vars in `os.environ` before walker. | `config` | `load_config` side effect | Startup |
+| 2.6 | RANKER_W_* and RANKER_RECENCY_HALFLIFE_DAYS parsed; bad values reported. | `config` | `load_ranker_weights` | Startup |
+| 2.7 | `.env.sample` documents new vars. | `.env.sample` | file change | n/a |
+| 3.1 | First start builds tree and caches. | `index`, `tree` | `open_or_build`, `build_tree` | Startup |
 | 3.2 | Fresh cache reused. | `index` | mtime check | Startup |
 | 3.3 | Stale cache rebuilt. | `index` | mtime check | Startup |
 | 3.4 | Empty/missing `by_month/` fails loudly. | `index`, `__main__` | startup error | Startup |
 | 3.5 | Cache lives under output directory. | `index` | path constant | Startup |
-| 4.1 | `search_likes` returns matching tweets. | `tools`, `index` | `search_likes` | search flow |
-| 4.2 | Result includes id, month, handle, snippet. | `tools`, `index` | `SearchHit` | search flow |
-| 4.3 | Empty query → input-validation error. | `tools` | `search_likes` | n/a |
-| 4.4 | LLM failure → tool error, server stays up. | `tools`, `errors` | error path | search flow |
-| 4.5 | No matches → empty list, not error. | `tools`, `index` | `SearchHit` list | search flow |
-| 4.6 | JSON schema declared (incl. filter fields). | `server` | tool registration | n/a |
-| 5.1 | `list_months` returns months present. | `tools` | `list_months` | n/a |
-| 5.2 | Reverse chronological order. | `tools`, `index` | `list_months` | n/a |
-| 5.3 | Includes path and count when available. | `tools`, `index` | `MonthInfo` | n/a |
-| 5.4 | JSON schema declared. | `server` | tool registration | n/a |
-| 6.1 | `get_month(year_month)` returns Markdown. | `tools` | `get_month` | n/a |
-| 6.2 | Bad format → input-validation error. | `tools` | `get_month` | n/a |
-| 6.3 | Missing month → not-found error. | `tools` | `get_month` | n/a |
-| 6.4 | JSON schema declared. | `server` | tool registration | n/a |
-| 7.1 | `read_tweet(tweet_id)` returns full tweet. | `tools`, `index` | `read_tweet` | n/a |
-| 7.2 | Sourced from `likes.json` via Spec 1. | `index` | `load_export` | n/a |
-| 7.3 | Unknown id → not-found error. | `tools` | `read_tweet` | n/a |
-| 7.4 | Empty/non-numeric id → input-validation error. | `tools` | `read_tweet` | n/a |
-| 7.5 | JSON schema declared. | `server` | tool registration | n/a |
-| 8.1 | No writes under `by_month/` or `likes.json`. | `index`, `tools` | grep + behavior | n/a |
-| 8.2 | No imports of scraper network paths. | `index`, `tools` | grep-checkable | n/a |
-| 8.3 | No `cookies.json` access. | `config`, `index`, `tools` | grep-checkable | n/a |
-| 8.4 | LLM calls only via configured OpenAI-compatible endpoint. | `index`, `config` | startup | Startup |
-| 8.5 | Writes only to `output_dir` cache and stderr. | `index` | path constant | n/a |
-| 9.1 | `pytest` runs with no `OPENAI_BASE_URL`, no real HTTP. | tests/mcp, conftest | network guard | n/a |
-| 9.2 | LLM and PageIndex tree builder mocked. | conftest | fixtures | n/a |
-| 9.3 | Integration test exercises all four tools. | `test_server_integration` | in-process server | end-to-end |
-| 9.4 | Real HTTP fails loudly. | conftest | network guard | n/a |
-| 9.5 | No cookies in tests. | conftest | grep + behavior | n/a |
-| 9.6 | New test deps reuse Spec 1's `dev` group. | `pyproject.toml` | `[dependency-groups].dev` | n/a |
-| 10.1 | README documents `.mcp.json` registration. | README | doc | n/a |
-| 10.2 | README lists `.env` requirements + `scrape.sh` prereq. | README | doc | n/a |
-| 10.3 | README identifies the four tools. | README | doc | n/a |
-| 10.4 | README states stdio-only, no hosted by default. | README | doc | n/a |
-| 11.1 | Bad startup config → exit non-zero with named error. | `config`, `__main__` | error path | Startup |
-| 11.2 | LLM down at runtime → tool error, server alive. | `errors`, `tools`, `server` | error path | search flow |
-| 11.3 | Filesystem changes picked up on restart. | `index` | mtime check | Startup |
-| 11.4 | Bad tool argument → input-validation error. | `tools`, `errors` | error path | n/a |
-
-Note on requirements coverage: requirements.md was updated alongside this design to align with the brief — it now references the three OpenAI-compatible env vars (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`) and the structured-filter `search_likes(query, year=None, month_start=None, month_end=None)` signature. Requirement 4 was extended from 6 to 8 acceptance criteria to cover the structured filter and its validation; the additional rows in the traceability table account for those.
+| 3.6 | Tree is pure-Python, no LLM. | `tree` | `build_tree` | n/a |
+| 4.1 | Walker iterates months in scope, batches in chunks. | `walker` | `walk` | search flow |
+| 4.2 | Prompt asks for JSON; irrelevant tweets omitted. | `walker` | `walk` | search flow |
+| 4.3 | Walker filters bad ids and bad relevance values. | `walker` | `walk` | search flow |
+| 4.4 | Walker raises on per-chunk failure. | `walker` | `walk` | search flow |
+| 4.5 | Walker is the only LLM call site. | `walker` | grep-checkable | n/a |
+| 4.6 | Walker is the test mock seam. | `walker` | mock target | n/a |
+| 5.1 | Ranker produces ScoredHit per known-id WalkerHit, sorted. | `ranker` | `rank` | search flow |
+| 5.2 | Ranker formula matches the spec. | `ranker` | `rank` | search flow |
+| 5.3 | Defaults match documentation; env overrides supported. | `config`, `ranker` | weights | Startup |
+| 5.4 | Recency decay formula and anchor selection. | `ranker`, `index` | `rank`, anchor selection | search flow |
+| 5.5 | Ranker is pure. | `ranker` | `rank` | n/a |
+| 5.6 | Ranker does not import OpenAI. | `ranker` | grep-checkable | n/a |
+| 5.7 | Author affinity precomputed at build time. | `index`, `ranker` | `compute_author_affinity` | Startup |
+| 6.1 | `search_likes` resolves filter, calls walker, calls ranker, returns top-N. | `tools`, `index` | `search_likes`, `search` | search flow |
+| 6.2 | Optional structured filter narrows months. | `tools`, `index` | `_resolve_filter` | search flow |
+| 6.3 | Filter validation. | `tools`, `index` | `_resolve_filter` | n/a |
+| 6.4 | Result includes id, month, handle, snippet, score, walker_relevance, why, breakdown. | `tools` | `search_likes` | search flow |
+| 6.5 | Empty query → input-validation error. | `tools` | `search_likes` | n/a |
+| 6.6 | Walker failure → upstream_failure tool error. | `tools`, `errors`, `walker` | error path | search flow |
+| 6.7 | No hits → empty list. | `tools`, `index` | `search` | search flow |
+| 6.8 | JSON schema declared. | `server` | tool registration | n/a |
+| 7.1 | `list_months` returns months present. | `tools` | `list_months` | n/a |
+| 7.2 | Reverse chronological. | `tools`, `index` | `list_months` | n/a |
+| 7.3 | Includes path and count when available. | `tools`, `index` | `MonthInfo` | n/a |
+| 7.4 | JSON schema declared. | `server` | tool registration | n/a |
+| 8.1 | `get_month(year_month)` returns Markdown. | `tools` | `get_month` | n/a |
+| 8.2 | Bad format → input-validation error. | `tools` | `get_month` | n/a |
+| 8.3 | Missing month → not-found error. | `tools` | `get_month` | n/a |
+| 8.4 | JSON schema declared. | `server` | tool registration | n/a |
+| 9.1 | `read_tweet(tweet_id)` returns full tweet. | `tools`, `index` | `read_tweet` | n/a |
+| 9.2 | Sourced from `likes.json`. | `index` | `load_export` | n/a |
+| 9.3 | Unknown id → not-found error. | `tools` | `read_tweet` | n/a |
+| 9.4 | Empty/non-numeric id → input-validation error. | `tools` | `read_tweet` | n/a |
+| 9.5 | JSON schema declared. | `server` | tool registration | n/a |
+| 10.1 | No writes under `by_month/` or `likes.json`. | `index`, `tools` | grep + behavior | n/a |
+| 10.2 | No imports of scraper network paths. | `index`, `tools` | grep-checkable | n/a |
+| 10.3 | No `cookies.json` access. | `config`, `index`, `tools` | grep-checkable | n/a |
+| 10.4 | LLM calls only via configured endpoint. | `walker`, `config` | startup | Startup |
+| 10.5 | Writes only to output dir cache and stderr. | `index` | path constant | n/a |
+| 11.1 | `pytest` runs with no `OPENAI_BASE_URL`, no real HTTP. | tests/mcp, conftest | network guard | n/a |
+| 11.2 | Walker mocked; tree and ranker are pure. | conftest | fixtures | n/a |
+| 11.3 | Integration test exercises all four tools. | `test_server_integration` | in-process server | end-to-end |
+| 11.4 | Real HTTP fails loudly. | conftest | network guard | n/a |
+| 11.5 | No cookies in tests. | conftest | grep + behavior | n/a |
+| 11.6 | New test deps reuse Spec 1's `dev` group. | `pyproject.toml` | `[dependency-groups].dev` | n/a |
+| 12.1 | README documents `.mcp.json` registration. | README | doc | n/a |
+| 12.2 | README lists `.env` requirements + `scrape.sh` prereq. | README | doc | n/a |
+| 12.3 | README identifies the four tools. | README | doc | n/a |
+| 12.4 | README states stdio-only, no hosted by default. | README | doc | n/a |
+| 13.1 | Bad startup config → exit non-zero with named error. | `config`, `__main__` | error path | Startup |
+| 13.2 | LLM down at runtime → tool error, server alive. | `errors`, `tools`, `server` | error path | search flow |
+| 13.3 | Filesystem changes picked up on restart. | `index` | mtime check | Startup |
+| 13.4 | Bad tool argument → input-validation error. | `tools`, `errors` | error path | n/a |
 
 ## Testing Strategy
 
-Tests live under `tests/mcp/` so they are separable from Spec 1's `tests/`. Each test file targets one source module.
+Tests live under `tests/mcp/`. One file per source module plus a server integration test.
 
 ### Unit tests
 
-- `test_config.py` — `load_config` against an in-memory `env` dict, against a `.env` file fixture in `tmp_path`, missing `OPENAI_BASE_URL` raises `ConfigError` naming the variable, missing `OPENAI_MODEL` raises `ConfigError` naming the variable, default `OUTPUT_DIR` is `output`, `os.environ` carries the resolved `OPENAI_BASE_URL` and `OPENAI_API_KEY` after a successful call. Covers Requirements 2.1, 2.2, 2.3, 2.4, 11.1.
-- `test_index.py` — `Index.open_or_build` with mocked `_build_tree` against the fixture export. Cases: cache absent (build invoked, cache written), cache fresh (build not invoked, cache loaded), cache stale (touch one `.md` newer than the cache, rebuild invoked). `Index.open_or_build` against an empty `by_month/` raises `IndexError`. `Index.search("anything")` (unfiltered, mocked `_query`) returns `SearchHit` list. `Index.search("anything", year=2025, month_start="01", month_end="02")` only sees the in-range subtree (assert by spying on `_query`'s tree argument or by checking the resolved month list). `Index.search("anything", year=2025, month_start="01")` (single month) selects only `2025-01`. Filter validation errors (`year` missing while `month_start` set, `month_start` > `month_end`) raise `ValueError`. `Index.lookup_tweet` returns the right `Tweet` for a fixture ID and `None` for `"missing"`. `Index.list_months` returns `MonthInfo` list reverse-chronologically with correct counts. `Index.get_month_markdown` returns content for an existing month and `None` for a missing one. Covers 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.5, 5.1, 5.2, 5.3, 7.1, 7.2, 7.3.
-- `test_tools.py` — each handler with a mocked `Index`. `search_likes`: empty/whitespace `query` → `invalid_input`; valid `query` with mocked matches → list of dicts with the four expected keys; valid `query` plus full filter triple → handler passes filter through to `index.search`; bad filter (year-only-allowed rule violations) → `invalid_input`; `index.search` raising `RuntimeError` → `upstream_failure`. `list_months`: returns dict list with `year_month`, `path`, `tweet_count`. `get_month`: bad pattern → `invalid_input`; missing month → `not_found`; valid → returns the Markdown string. `read_tweet`: empty/non-numeric `tweet_id` → `invalid_input`; unknown id → `not_found`; valid → returns the metadata dict. Covers 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.3, 6.1, 6.2, 6.3, 7.1, 7.3, 7.4, 11.4.
+- `test_config.py` — `load_config` against an in-memory `env` dict; missing `OPENAI_BASE_URL` / `OPENAI_MODEL` raises `ConfigError` naming the variable; default `OUTPUT_DIR`; `os.environ` carries the resolved values after a successful call. `load_ranker_weights` against a dict containing `RANKER_W_*` overrides; missing keys take defaults; non-numeric values raise `ConfigError`. Covers Requirements 2.1, 2.2, 2.3, 2.5, 2.6, 13.1.
+- `test_tree.py` — `build_tree` against `tests/mcp/fixtures/by_month/`. Asserts `nodes_by_month` has the expected months in the expected order, each `TreeNode` has the right `tweet_id` (extracted from the link), the right `handle`, non-empty `text` and `raw_section`. A fixture month with a malformed section asserts the section is skipped. Pure function; no LLM mock needed. Covers 3.6.
+- `test_walker.py` — `walker.walk` with the OpenAI client mocked. Cases: a chunk where the mocked LLM returns valid JSON for two ids and one nonsense id → walker emits two `WalkerHit`s; a chunk where `relevance` is out of range or non-numeric → entry dropped; a chunk where the mock raises → `walker.walk` raises `WalkerError`; multi-month walk where `months_in_scope` is `["2025-01", "2025-03"]` → only those months are iterated (assert by counting LLM calls). Covers 4.1, 4.2, 4.3, 4.4.
+- `test_ranker.py` — pure-function tests with hand-built `WalkerHit` lists, hand-built `Tweet` objects, hand-built `author_affinity`. Cases: monotonicity (higher walker relevance → higher score, all else equal); engagement contribution (higher favorite_count → higher score after `log1p`); recency decay (older tweet → lower score by exactly the documented formula); known author affinity boost; verified and media flags add their constant amounts; `feature_breakdown` sums to `score`; sort order is descending by score, ties broken deterministically. Covers 5.1-5.7.
+- `test_index.py` — `TweetIndex.open_or_build` against the fixture export. Cases: cache absent → builds and writes cache (assert via `tree.build_tree` call counter on a spy); cache fresh → loads cache without rebuild; cache stale → rebuilds. `TweetIndex.open_or_build` against an empty `by_month/` raises `IndexError`. `TweetIndex.search("anything")` (filter unset) calls `walker.walk` (mocked) with `months_in_scope=None` and returns the ranked output. `TweetIndex.search("anything", year=2025, month_start="01", month_end="02")` causes `walker.walk` to be called with `months_in_scope=["2025-01", "2025-02"]`. `TweetIndex._resolve_filter` raises `ValueError` for invalid combinations. `TweetIndex.lookup_tweet` returns the right `Tweet` for a fixture ID and `None` for `"missing"`. `TweetIndex.list_months` returns `MonthInfo` list reverse-chronologically. `TweetIndex.get_month_markdown` returns content for an existing month and `None` otherwise. `TweetIndex` recency anchor is the configured month-end / year-end / now depending on the filter. Covers 3.1-3.5, 6.1, 6.2, 6.7, 7.1-7.3, 9.1, 9.2, 9.3.
+- `test_tools.py` — each handler with a mocked `TweetIndex`. `search_likes`: empty/whitespace `query` → `invalid_input`; valid `query` with mocked matches → list of dicts with the eight expected keys; valid `query` plus full filter triple → handler passes filter through; `index.search` raising `WalkerError` → `upstream_failure`; year-only filter → `_resolve_filter` returns the year's months; bad filter → `invalid_input`. `list_months`: returns dict list with `year_month`, `path`, `tweet_count`. `get_month`: bad pattern → `invalid_input`; missing month → `not_found`. `read_tweet`: empty/non-numeric → `invalid_input`; unknown id → `not_found`. Covers 6.1-6.7, 7.1-7.3, 8.1-8.3, 9.1-9.4, 13.4.
 
 ### Integration test
 
-- `test_server_integration.py` — build the MCP server in-process via `server.build_server(index)` against the fixture export with PageIndex mocked. Drive each of the four tools through the SDK's tool-call dispatch (programmatic, not stdio) and assert the response shape matches the declared output schema. Verify a `ToolError` raised inside a handler becomes an MCP error response with the right category and the server does not propagate the exception. Verify the registered tool list is exactly the four tool names. Covers 1.1, 1.3, 4.6, 5.4, 6.4, 7.5, 9.3, 11.2.
-
-### Spec 1 fall-out: `test_formatters.py`
-
-Two assertion additions inside `tests/test_formatters.py`:
-
-- A test that asserts `# X (Twitter) Liked Tweets`, `**Exported:**`, and `**Total Tweets:**` are present in the output of `MarkdownFormatter().export(tweets, file)` (default arguments, equivalent to today's single-file behavior).
-- A test that asserts those three strings are absent from the output of `MarkdownFormatter().export(tweets, file, omit_global_header=True)`, while `## YYYY-MM` headings and the per-tweet blocks remain present and correct.
-
-These are additive; the existing `test_markdown_formatter_basic` and `test_markdown_formatter_unknown_routing` tests continue to assert the current shape against default arguments and continue to pass without modification.
+- `test_server_integration.py` — build the MCP server in-process via `server.build_server(index)` against the fixture export with `walker.walk` mocked. Drive each of the four tools through the SDK's tool-call dispatch (programmatic, not stdio) and assert the response shape matches the declared output schema. Verify a `ToolError` raised inside a handler becomes an MCP error response with the right category and the server does not propagate. Verify the registered tool list is exactly the four tool names. Verify a simulated walker failure (`walker.walk` raising `WalkerError`) becomes an `upstream_failure` and the server stays alive for subsequent calls. Covers 1.1, 1.3, 6.6, 6.8, 7.4, 8.4, 9.5, 11.3, 13.2.
 
 ### Fixtures
 
-`tests/mcp/fixtures/by_month/` contains three small `.md` files generated by hand to match the layout the post-change formatter produces (`## YYYY-MM`, `### @handle`, the per-tweet block, no global h1). `tests/mcp/fixtures/likes.json` has four tweets across the three months matching the Markdown content. The fixtures are small (under 100 lines total) and checked into the repo.
+`tests/mcp/fixtures/by_month/` contains three small `.md` files generated by hand to match the post-task-1.1 formatter layout (`## YYYY-MM`, `### [@handle]`, the per-tweet block including the canonical `🔗 [View on X]` link, no global h1). `tests/mcp/fixtures/likes.json` has four tweets across the three months whose IDs match what the per-month files reference. Engagement counts are non-zero so ranker tests can exercise the formula.
 
 ### Network and LLM guard
 
 `tests/mcp/conftest.py` does two things:
 
-1. An autouse fixture that monkeypatches the LLM-call entry point (the wrapper around the OpenAI SDK that PageIndex calls during `_build_tree` and `_query`) to raise `RealLLMCallAttempted`. This is the equivalent of Spec 1's `responses` strict-mode guard. Requirements 9.1, 9.2, 9.4.
-2. An autouse fixture that asserts no `cookies.json` access happens during a test run, either by setting an env variable that the `Config` honors as a "tests mode" hint or by patching a well-known path read. Requirement 9.5.
+1. An autouse fixture that monkeypatches `walker.walk` (or its underlying chat-completions helper) to raise `RealLLMCallAttempted` unless the test explicitly opts in by overriding the fixture. This enforces "no real HTTP" by construction.
+2. An autouse fixture that asserts no `cookies.json` access happens during a test run.
 
 ### Real-model verification (manual, not CI)
 
-The README documents how to verify against a real local LLM: start a local OpenAI-compatible server (a model exposed at `OPENAI_BASE_URL` on the `/v1/chat/completions` shape), set the three env vars, run `python -m x_likes_mcp`, register with Claude Code, ask a sample question (`search_likes("kernel scheduling")`, `search_likes("kernel scheduling", year=2025, month_start="03", month_end="05")`). Not gated in CI.
+The README documents how to verify against a real local LLM: start a local OpenAI-compatible server, set the three env vars, run `python -m x_likes_mcp`, register with Claude Code, ask `search_likes("kernel scheduling")` open-ended, then `search_likes("kernel scheduling", year=2025, month_start="03", month_end="05")`. Visibly faster on the filtered call. Not gated in CI.
 
 ## Acceptance Mapping
 
-The Requirements Traceability table above pairs each numeric requirement to the test that proves it. The full pairing:
+The Requirements Traceability table above pairs each numeric requirement to the test that proves it. Notable parings:
 
-- 1.1, 1.3 → `test_server_integration.py` (in-process server announcement) plus a smoke run check in the manual integration step.
-- 1.2, 1.4 → `pyproject.toml` review and `uv pip show mcp pageindex` in the integration check task.
-- 1.5 → `test_server_integration.py` plus the cookies guard in `conftest.py`.
-- 2.1-2.4, 11.1 → `test_config.py`.
-- 2.5 → grep on `.env.sample` in the integration check task.
-- 3.1, 3.2, 3.3, 3.4, 3.5 → `test_index.py` cache cases.
-- 4.1, 4.2, 4.5 → `test_index.py` and `test_tools.py` (handler shape).
-- 4.3, 4.4, 11.4 → `test_tools.py` error paths.
-- 4.6, 5.4, 6.4, 7.5 → `test_server_integration.py` schema assertions.
-- 5.1, 5.2, 5.3 → `test_index.py::test_list_months_*`.
-- 6.1, 6.2, 6.3 → `test_tools.py::test_get_month_*`.
-- 7.1, 7.2, 7.3, 7.4 → `test_tools.py::test_read_tweet_*` and `test_index.py::test_lookup_tweet_*`.
-- 8.1, 8.2, 8.3, 8.5 → grep checks plus the cookies guard.
-- 8.4 → `test_config.py` plus `test_index.py` (model name is `OPENAI_MODEL`, OpenAI SDK reads base URL from env).
-- 9.1, 9.2, 9.4, 9.5 → `conftest.py` guards.
-- 9.3 → `test_server_integration.py`.
-- 9.6 → `pyproject.toml` review.
-- 10.1, 10.2, 10.3, 10.4 → README review in the docs task.
-- 11.2 → `test_server_integration.py::test_llm_failure_returns_tool_error`.
-- 11.3 → `test_index.py::test_cache_stale_rebuilds`.
+- 4.1-4.4 → `test_walker.py` cases.
+- 5.1-5.7 → `test_ranker.py` cases plus `test_index.py` for the affinity precomputation and anchor selection.
+- 6.1, 6.2, 6.4, 6.7 → `test_index.py` and `test_tools.py` (handler shape).
+- 6.5, 6.6, 13.4 → `test_tools.py` error paths.
+- 6.8, 7.4, 8.4, 9.5 → `test_server_integration.py` schema assertions.
+- 13.2 → `test_server_integration.py::test_walker_failure_returns_tool_error`.
+- 13.3 → `test_index.py::test_cache_stale_rebuilds`.
 
 ## Architecture Rules and Sentrux Boundaries
 
-`.sentrux/rules.toml` constrains the layer model inside `x_likes_exporter/`. The new package `x_likes_mcp/` lives at the project top level, not inside `x_likes_exporter/`. None of the existing layer assignments or boundary rules apply to it. The single module touched in `x_likes_exporter/` (`formatters.py`, in the `orchestration` layer) gains one keyword parameter and uses no new imports; the layer assignment, the dependency direction, and every existing boundary rule continue to hold.
-
-Confirmed: this spec does not trip any existing `.sentrux/rules.toml` boundary.
+`.sentrux/rules.toml` constrains the layer model inside `x_likes_exporter/`. The new package `x_likes_mcp/` lives at the project top level, not inside `x_likes_exporter/`. None of the existing layer assignments or boundary rules apply to it.
 
 ## Error Handling
 
 ### Categories
 
-- **Startup errors** (`ConfigError`, `IndexError`, `FileNotFoundError` on `likes.json`): printed to stderr in a single line, process exits with code 2 (Requirement 11.1).
-- **Input validation** (`ToolError(category="invalid_input", ...)`): MCP error response, server stays up. Used by all four tools for shape checks (Requirements 4.3, 6.2, 7.4, 11.4) and by `search_likes` filter validation.
-- **Not found** (`ToolError(category="not_found", ...)`): MCP error response, server stays up. Used by `get_month` and `read_tweet` for missing entities (Requirements 6.3, 7.3).
-- **Upstream failure** (`ToolError(category="upstream_failure", ...)`): MCP error response, server stays up. Used when PageIndex raises, when the OpenAI SDK call fails, or when any other unexpected exception bubbles up to the boundary (Requirements 4.4, 11.2).
+- **Startup errors** (`ConfigError`, `IndexError`, `FileNotFoundError` on `likes.json`): printed to stderr in a single line, process exits with code 2 (Requirement 13.1).
+- **Input validation** (`ToolError(category="invalid_input", ...)`): MCP error response, server stays up. Used by all four tools for shape checks (Requirements 6.5, 8.2, 9.4, 13.4) and by `search_likes` filter validation (Requirement 6.3).
+- **Not found** (`ToolError(category="not_found", ...)`): MCP error response, server stays up. Used by `get_month` and `read_tweet` for missing entities (Requirements 8.3, 9.3).
+- **Upstream failure** (`ToolError(category="upstream_failure", ...)`): MCP error response, server stays up. Used when the walker raises (LLM failure, malformed response), or any other unexpected exception (Requirements 6.6, 13.2).
 
 ### Strategy
 
@@ -716,56 +819,78 @@ async def call_tool(name: str, arguments: dict) -> ToolResult:
         return mcp_error_result("upstream_failure", "internal error; see server logs")
 ```
 
-The startup pipeline in `__main__.main` has its own boundary: catch `ConfigError`, `IndexError`, `FileNotFoundError`, print to stderr, return non-zero. Other exceptions during startup are not caught — they crash the process and surface as a traceback, which is the right outcome for a real bug.
+The startup pipeline in `__main__.main` has its own boundary: catch `ConfigError`, `IndexError`, `FileNotFoundError`, print to stderr, return non-zero. Other exceptions during startup propagate.
 
 ## Performance and Scalability
 
-Out of scope as a feature. Three notes:
+Out of scope as a feature. Notes:
 
-- Cache hit cost is dominated by `pickle.load`. For a typical export size (a few thousand tweets, a few hundred months), this is sub-second.
-- Cache miss cost is dominated by PageIndex's tree build, which is itself dominated by the LLM calls PageIndex makes during build. The user pays this cost once after each new monthly Markdown lands.
-- Filtered `search_likes` over a 3-month range avoids walking 26k+ tweets through a single tree pass; the tree handed to PageIndex is roughly 1/40th the size of the full one. The benefit is qualitative; no benchmarks are gated.
+- Cache hit cost is dominated by `pickle.load`. For a typical export, sub-second.
+- Cache miss cost is dominated by `tree.build_tree`, which is pure Python parsing — fast even on tens of thousands of tweets.
+- Walker cost is linear in number of in-scope tweets divided by `chunk_size`, times per-chunk LLM latency. The structured filter is the main lever: a 3-month query touches roughly 3/26 of the corpus.
+- Ranker cost is linear in number of walker hits, all arithmetic. Negligible.
 
-If startup latency becomes a real problem at much larger export sizes, per-month tree caching (one cache file per `.md`) is the obvious next move. Not in scope here.
+If startup latency becomes an issue at much larger export sizes, per-month tree caching (one cache file per `.md`) is the obvious next move. Not in scope here.
 
 ## Security
 
-Single-user local tool. No auth, no multi-user concerns. Three safety properties:
+Single-user local tool. No auth, no multi-user concerns. Properties:
 
-- Test fixtures contain no real credentials. The fixture `likes.json` and the per-month Markdown are hand-built with `@test_user` style placeholders.
-- The server never reads `cookies.json`, never imports a network code path from `x_likes_exporter` that hits X, and never calls a hosted LLM service unless the user explicitly points `OPENAI_BASE_URL` at one.
-- The pickle cache is a known concern in general but acceptable here: single-user, single-machine, written by this server, never crosses a trust boundary. If PageIndex publishes a JSON or other safer serialization at impl time, prefer that.
+- Test fixtures contain no real credentials.
+- The server never reads `cookies.json`, never imports a scraper network code path, and never calls a hosted LLM service unless the user points `OPENAI_BASE_URL` at one.
+- The pickle cache is single-user, single-machine, written by this server, never crosses a trust boundary.
 
 ## Migration: `.env.sample` Update
 
-The existing `.env.sample` carries `X_USERNAME`, `X_USER_ID`, `COOKIES_FILE`, `OUTPUT_DIR`. Three lines are appended:
+The existing `.env.sample` carries `X_USERNAME`, `X_USER_ID`, `COOKIES_FILE`, `OUTPUT_DIR`. Append (concrete strings to be tuned at impl time):
 
 ```
-# OpenAI-compatible LLM endpoint for the MCP server's reasoning step.
-# PageIndex calls the OpenAI SDK directly; the SDK reads OPENAI_BASE_URL
-# and OPENAI_API_KEY from os.environ when constructing its async client.
-# Local by default; setting this to a hosted vendor is the user's choice.
-OPENAI_BASE_URL=http://localhost:8080
+# OpenAI-compatible LLM endpoint for the MCP server's walker.
+# The walker calls the OpenAI Python SDK directly; the SDK reads
+# OPENAI_BASE_URL and OPENAI_API_KEY from os.environ at client-construction.
+# Local by default; pointing this at a hosted vendor is the user's choice.
+OPENAI_BASE_URL=http://localhost:8080/v1
 OPENAI_API_KEY=
-OPENAI_MODEL=claude-opus-4-5
+OPENAI_MODEL=local-model-name
+
+# Ranker weights for search_likes. Defaults shown; uncomment to override.
+# Score formula:
+#   score = walker_relevance * W_RELEVANCE
+#         + log1p(favorite_count) * W_FAVORITE
+#         + log1p(retweet_count) * W_RETWEET
+#         + log1p(reply_count) * W_REPLY
+#         + log1p(view_count) * W_VIEW
+#         + author_affinity * W_AFFINITY
+#         + exp(-days_apart / halflife) * W_RECENCY
+#         + verified * W_VERIFIED
+#         + has_media * W_MEDIA
+#RANKER_W_RELEVANCE=10.0
+#RANKER_W_FAVORITE=2.0
+#RANKER_W_RETWEET=2.5
+#RANKER_W_REPLY=1.0
+#RANKER_W_VIEW=0.5
+#RANKER_W_AFFINITY=3.0
+#RANKER_W_RECENCY=1.5
+#RANKER_W_VERIFIED=0.5
+#RANKER_W_MEDIA=0.3
+#RANKER_RECENCY_HALFLIFE_DAYS=180
 ```
 
 Existing users do not need to migrate: `scrape.sh` does not consume the new variables. The MCP server is the only consumer.
 
 ## Open Questions and Risks
 
-- **PageIndex API stability.** The exact shape of PageIndex's tree-build, query, and subtree-selection functions is the biggest unknown. The `Index` wrapper exists to absorb it. If at impl time PageIndex's interface looks meaningfully different, the wrapper grows; the four tool handlers do not change.
-- **OpenAI SDK env-var lifecycle.** `config.load_config` writes `OPENAI_BASE_URL` and `OPENAI_API_KEY` into `os.environ` before the first PageIndex call so the SDK picks them up at client-construction time. No bridge translation needed; the SDK's documented env-var contract is what PageIndex relies on.
-- **Subtree selection vs. ad-hoc tree assembly.** If PageIndex's API does not allow querying a subtree, building per-month subtrees at index time and assembling an ad-hoc tree at filter time is the fallback. Either way, the observable behavior of the structured filter is the same. Decision deferred to impl time.
-- **Tree-leaf to tweet-id mapping.** The side-table assumes PageIndex returns enough information per match to identify the source section. If it returns only a synthesized answer, the wrapper has to do more work — for example, asking PageIndex's reasoning step to include tweet IDs in its prompt template. Both fallbacks are acceptable.
-- **Empty `output/by_month/` after a fresh checkout.** A user who clones the repo but has not run `scrape.sh` hits Requirement 3.4 on first `python -m x_likes_mcp`. The error message is the documentation: "output/by_month/ is empty or missing — run scrape.sh first." Not a UX problem worth designing around.
-- **Existing `output/by_month/` was generated with the old h1.** The user re-runs `./scrape.sh --no-media --format markdown` once after the formatter change lands. The first MCP server build then sees the new shape. Documenting this in the README's MCP section is enough.
+- **OpenAI SDK env-var lifecycle.** `config.load_config` writes `OPENAI_BASE_URL` and `OPENAI_API_KEY` into `os.environ` before the first walker call so the SDK picks them up at client-construction time. If a future SDK release stops reading env vars at construction, the walker can pass them explicitly to the client constructor; either way it is local to `walker.py`.
+- **JSON-mode availability on local models.** Some local models support OpenAI-style JSON mode (`response_format={"type": "json_object"}`); some do not. The walker prompt is written so that a tolerant JSON parse on a free-form response also works. Implementer's call which path to ship.
+- **Walker chunk size.** Default 30 is a guess based on typical model context budgets and the size of one tweet section. May need tuning at impl time. Tunable as a function argument.
+- **Ranker weight defaults.** The defaults are reasonable starting points, not optimized. The user is expected to tune them via `.env` over time. The `feature_breakdown` field on `ScoredHit` is there to make the tuning loop tractable.
+- **Empty `output/by_month/` after a fresh checkout.** A user who clones the repo but has not run `scrape.sh` hits Requirement 3.4 on first `python -m x_likes_mcp`. The error message is the documentation: "output/by_month/ is empty or missing — run scrape.sh first."
 
 ## Spec 1 Contract Concerns
 
-Two observations from going through this design that are worth filing back to Spec 1, neither blocking here:
+Two observations worth filing back to Spec 1, neither blocking here:
 
-1. **`load_export` returns `list[Tweet]`, not `dict[str, Tweet]`.** `Index` builds the dict itself. Fine for one consumer; if a second consumer wanted ID lookup, a small `index_by_id(tweets)` helper next to `load_export` would avoid duplication.
-2. **`iter_monthly_markdown` yields `Path` only.** `Index.list_months` re-parses `likes_YYYY-MM.md` from each path with a regex. A richer return type (`(path, year_month)` namedtuple) would let consumers skip the parse. Minor.
+1. `load_export` returns `list[Tweet]`, not `dict[str, Tweet]`. `TweetIndex` builds the dict itself. Fine for one consumer.
+2. `iter_monthly_markdown` yields `Path` only. `TweetIndex.list_months` re-parses `likes_YYYY-MM.md` from each path with a regex. A richer return type would let consumers skip the parse. Minor.
 
-Neither of these requires re-opening Spec 1 today. Both go on the Spec 1 follow-up list.
+Neither requires re-opening Spec 1 today.
