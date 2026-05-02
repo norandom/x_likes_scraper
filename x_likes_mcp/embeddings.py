@@ -33,11 +33,15 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import openai
 
 from .config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OPENROUTER_BASE_URL
+
+if TYPE_CHECKING:
+    from x_likes_exporter import Tweet
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +80,7 @@ __all__ = [
     "EmbeddingError",
     "CorpusEmbeddings",
     "Embedder",
+    "open_or_build_corpus",
 ]
 
 
@@ -635,4 +640,106 @@ def _load_cache(
         matrix=matrix,
         ordered_ids=list(tweet_ids),
         model_name=expected_model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (task 2.4)
+#
+# ``open_or_build_corpus`` is the single entry point the index layer calls
+# at startup. It tries the on-disk cache first; on any miss (model change,
+# id-set change, schema bump, missing/corrupt files) it rebuilds the matrix
+# via ``embedder.embed_corpus`` and persists the result. The function is
+# module-level (not a method on ``Embedder``) so the embedder stays focused
+# on the HTTP seam and the cosine math; the orchestration knot lives here.
+
+
+def open_or_build_corpus(
+    embedder: Embedder,
+    tweets_by_id: dict[str, "Tweet"],
+    cache_dir: Path,
+) -> CorpusEmbeddings:
+    """Load the corpus cache when valid; otherwise rebuild and save.
+
+    The function is duck-typed on the tweet objects: only ``.text`` is read
+    at runtime, so any object with that attribute is acceptable. The
+    ``Tweet`` annotation is a ``TYPE_CHECKING`` import to avoid pulling
+    ``x_likes_exporter`` into the embeddings module's import graph.
+
+    Algorithm:
+        1. Locate the on-disk cache files under ``cache_dir`` using the
+           module-level constants (``CACHE_NPY_NAME``, ``CACHE_META_NAME``).
+        2. Compute ``expected_ids = set(tweets_by_id.keys())``.
+        3. Try ``_load_cache`` with the embedder's model name + the
+           expected id set + the current schema version. If it returns a
+           :class:`CorpusEmbeddings`, return it (cache hit).
+        4. Otherwise build fresh: ``ordered_ids = sorted(tweets_by_id)``,
+           ``texts = [tweets_by_id[i].text or "" for i in ordered_ids]``,
+           call ``embedder.embed_corpus(ordered_ids, texts)``, persist via
+           ``_save_cache``, and return a new :class:`CorpusEmbeddings`.
+        5. Empty ``tweets_by_id`` short-circuits: returns an empty
+           ``CorpusEmbeddings`` with a ``(0, 0)`` matrix and does NOT write
+           the cache. The index layer is responsible for not invoking the
+           dense path on an empty corpus.
+
+    Args:
+        embedder: An :class:`Embedder` configured with the target model
+            and (eventually) a real API key. Only ``model_name`` and
+            ``embed_corpus`` are used here.
+        tweets_by_id: Mapping ``tweet_id -> Tweet``. Tweets are
+            duck-typed: each value must have a ``.text`` attribute (which
+            may be ``None``; a ``None`` text is encoded as ``""``).
+        cache_dir: Directory under which the two cache files live. The
+            caller is responsible for ensuring the directory exists; we
+            do not create it (a missing directory will surface as
+            :class:`EmbeddingError` from ``_save_cache``).
+
+    Returns:
+        A :class:`CorpusEmbeddings` whose ``ordered_ids`` is
+        ``sorted(tweets_by_id.keys())`` (or ``[]`` on the empty path) and
+        whose ``model_name`` matches ``embedder.model_name``.
+
+    Raises:
+        EmbeddingError: Propagated from ``embedder.embed_corpus`` (e.g.
+            missing API key, persistent rate limits) or from
+            ``_save_cache`` (e.g. unwritable cache directory).
+    """
+
+    cache_npy = cache_dir / CACHE_NPY_NAME
+    cache_meta = cache_dir / CACHE_META_NAME
+
+    # Empty corpus: skip cache I/O entirely. Returning a (0, 0) matrix
+    # gives downstream code a sentinel without a real model dimension.
+    if not tweets_by_id:
+        return CorpusEmbeddings(
+            matrix=np.zeros((0, 0), dtype=np.float32),
+            ordered_ids=[],
+            model_name=embedder.model_name,
+        )
+
+    expected_ids = set(tweets_by_id.keys())
+
+    cached = _load_cache(
+        cache_npy,
+        cache_meta,
+        expected_model=embedder.model_name,
+        expected_ids=expected_ids,
+        expected_schema_version=CACHE_SCHEMA_VERSION,
+    )
+    if cached is not None:
+        return cached
+
+    # Cache miss: rebuild. ``sorted`` gives the stable ordering the design
+    # requires so cache hits across runs do not flake on dict ordering.
+    ordered_ids = sorted(tweets_by_id.keys())
+    texts = [tweets_by_id[i].text or "" for i in ordered_ids]
+
+    matrix = embedder.embed_corpus(ordered_ids, texts)
+
+    _save_cache(cache_npy, cache_meta, matrix, ordered_ids, embedder.model_name)
+
+    return CorpusEmbeddings(
+        matrix=matrix,
+        ordered_ids=ordered_ids,
+        model_name=embedder.model_name,
     )

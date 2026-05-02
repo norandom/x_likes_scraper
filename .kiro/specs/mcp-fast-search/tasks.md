@@ -48,7 +48,7 @@
   - _Boundary: x_likes_mcp/embeddings.py_
   - _Depends: 2.1_
 
-- [ ] 2.4 Implement `open_or_build_corpus` orchestrator
+- [x] 2.4 Implement `open_or_build_corpus` orchestrator
   - Add `open_or_build_corpus(embedder, tweets_by_id, cache_dir)` to `embeddings.py`.
   - Cache hit path: `_load_cache(...)` returns a `CorpusEmbeddings` -> return it.
   - Cache miss path: `ordered_ids = sorted(tweets_by_id.keys())`, `texts = [tweets_by_id[i].text or "" for i in ordered_ids]`, `matrix = embedder.embed_corpus(ordered_ids, texts)`, then `_save_cache(...)`.

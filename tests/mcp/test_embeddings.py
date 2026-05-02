@@ -969,3 +969,272 @@ def test_load_cache_extra_id_in_meta_returns_none(tmp_path: Path) -> None:
         expected_ids={"a", "b", "c"},
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4: open_or_build_corpus orchestrator
+#
+# Covers:
+#   * Cold call (no cache present) builds via embed_corpus and persists
+#     the cache files.
+#   * Warm call (cache present and matching) skips _call_embeddings_api.
+#   * Model-name change forces a rebuild.
+#   * Tweet-id-set change forces a rebuild.
+#   * Empty tweets_by_id returns an empty (0, 0) corpus and does not
+#     write the cache.
+#   * Tweets with .text == None pass "" to embed_corpus.
+#   * After a build, _load_cache directly recovers a CorpusEmbeddings.
+#
+# Synthetic tweet objects are duck-typed: any object with a ``.text``
+# attribute works (the orchestrator only reads ``tweets_by_id[i].text``).
+
+import types  # noqa: E402  (co-located with the orchestrator tests)
+
+
+def _fake_tweet(text: str | None) -> types.SimpleNamespace:
+    """Minimal stand-in for a Tweet: only the ``.text`` attribute is used."""
+
+    return types.SimpleNamespace(text=text)
+
+
+def _fake_tweets(n: int, prefix: str = "id") -> dict[str, types.SimpleNamespace]:
+    """Build a dict of synthetic tweets with predictable ids and texts."""
+
+    return {f"{prefix}_{i}": _fake_tweet(f"text {i}") for i in range(n)}
+
+
+def _canned_vectors_factory(dim: int = 4):
+    """Return a stub for ``_call_embeddings_api`` that emits unit-length rows.
+
+    Each row is dimension-``dim``; the value is derived from the input
+    text's hash so distinct inputs land on distinct vectors. Exact values
+    do not matter for orchestrator tests — what matters is shape + that
+    the matrix can round-trip through the cache.
+    """
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        rows: list[list[float]] = []
+        for text in texts:
+            # Deterministic per-text vector: place 1.0 at one of D positions.
+            # Empty strings are allowed (they map to position 0).
+            idx = (hash(text) % dim) if text else 0
+            row = [0.0] * dim
+            row[idx] = 1.0
+            rows.append(row)
+        return rows
+
+    return stub
+
+
+def test_open_or_build_corpus_cold_calls_encode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = _make_embedder(model_name="test-model")
+    tweets_by_id = _fake_tweets(5)
+
+    counter = {"n": 0}
+    base_stub = _canned_vectors_factory(dim=4)
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        counter["n"] += 1
+        return base_stub(texts)
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    result = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
+
+    assert isinstance(result, emb.CorpusEmbeddings)
+    assert result.matrix.shape == (5, 4)
+    assert result.ordered_ids == sorted(tweets_by_id.keys())
+    assert result.model_name == "test-model"
+    assert counter["n"] >= 1
+
+    # Cache files now exist on disk.
+    assert (tmp_path / emb.CACHE_NPY_NAME).exists()
+    assert (tmp_path / emb.CACHE_META_NAME).exists()
+
+
+def test_open_or_build_corpus_warm_skips_encode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = _make_embedder(model_name="test-model")
+    tweets_by_id = _fake_tweets(5)
+
+    counter = {"n": 0}
+    base_stub = _canned_vectors_factory(dim=4)
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        counter["n"] += 1
+        return base_stub(texts)
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    # First (cold) call builds + persists.
+    first = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
+    cold_calls = counter["n"]
+    assert cold_calls >= 1
+
+    # Reset counter and re-open against the same cache_dir + tweets.
+    counter["n"] = 0
+    second = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
+
+    assert counter["n"] == 0  # cache hit; no encoding work
+    assert second.ordered_ids == first.ordered_ids
+    assert second.model_name == first.model_name
+    assert np.array_equal(second.matrix, first.matrix)
+
+
+def test_open_or_build_corpus_model_change_rebuilds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tweets_by_id = _fake_tweets(5)
+
+    counter = {"n": 0}
+    base_stub = _canned_vectors_factory(dim=4)
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        counter["n"] += 1
+        return base_stub(texts)
+
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    embedder1 = emb.Embedder(api_key="x", model_name="model-a")
+    monkeypatch.setattr(embedder1, "_call_embeddings_api", stub)
+    emb.open_or_build_corpus(embedder1, tweets_by_id, tmp_path)
+    initial_calls = counter["n"]
+    assert initial_calls >= 1
+
+    # Now switch model name; the cache should invalidate and rebuild.
+    counter["n"] = 0
+    embedder2 = emb.Embedder(api_key="x", model_name="model-b")
+    monkeypatch.setattr(embedder2, "_call_embeddings_api", stub)
+    result = emb.open_or_build_corpus(embedder2, tweets_by_id, tmp_path)
+
+    assert counter["n"] >= 1, "model change must force a rebuild"
+    assert result.model_name == "model-b"
+
+    # Meta file on disk now records the new model name.
+    meta = json.loads((tmp_path / emb.CACHE_META_NAME).read_text())
+    assert meta["model_name"] == "model-b"
+
+
+def test_open_or_build_corpus_id_change_rebuilds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = _make_embedder(model_name="test-model")
+
+    counter = {"n": 0}
+    base_stub = _canned_vectors_factory(dim=4)
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        counter["n"] += 1
+        return base_stub(texts)
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    # Initial build with 5 tweets.
+    initial_tweets = _fake_tweets(5, prefix="id")
+    emb.open_or_build_corpus(embedder, initial_tweets, tmp_path)
+    assert counter["n"] >= 1
+
+    # Reset and rebuild with one extra tweet (id_5). The id-set differs, so
+    # the cache invalidates.
+    counter["n"] = 0
+    expanded_tweets = _fake_tweets(6, prefix="id")  # id_0 .. id_5
+    result = emb.open_or_build_corpus(embedder, expanded_tweets, tmp_path)
+
+    assert counter["n"] >= 1, "id-set change must force a rebuild"
+    assert result.ordered_ids == sorted(expanded_tweets.keys())
+    assert result.matrix.shape[0] == 6
+
+
+def test_open_or_build_corpus_empty_tweets_returns_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = _make_embedder(model_name="test-model")
+
+    counter = {"n": 0}
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        counter["n"] += 1
+        return [[0.0]] * len(texts)
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+
+    result = emb.open_or_build_corpus(embedder, {}, tmp_path)
+
+    assert counter["n"] == 0, "empty corpus must not call the embeddings API"
+    assert isinstance(result, emb.CorpusEmbeddings)
+    assert result.matrix.shape == (0, 0)
+    assert result.ordered_ids == []
+    assert result.model_name == "test-model"
+
+    # No cache files were written for the empty case.
+    assert not (tmp_path / emb.CACHE_NPY_NAME).exists()
+    assert not (tmp_path / emb.CACHE_META_NAME).exists()
+
+
+def test_open_or_build_corpus_uses_text_or_empty_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tweets with ``text=None`` must pass ``""`` to ``embed_corpus``.
+
+    The orchestrator builds ``texts = [tweets_by_id[i].text or "" for i ...]``.
+    Verifying the substitution is happening means asserting the stub
+    received ``""`` for the None entries (and never raised on a None).
+    """
+
+    embedder = _make_embedder(model_name="test-model", batch_size=8)
+
+    received_texts: list[str] = []
+
+    def stub(texts: list[str]) -> list[list[float]]:
+        received_texts.extend(texts)
+        return [[1.0, 0.0, 0.0, 0.0]] * len(texts)
+
+    monkeypatch.setattr(embedder, "_call_embeddings_api", stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    tweets_by_id = {
+        "a": _fake_tweet("hello"),
+        "b": _fake_tweet(None),
+        "c": _fake_tweet("world"),
+        "d": _fake_tweet(None),
+    }
+
+    result = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
+
+    # Ordered by sorted ids: a, b, c, d. None -> "".
+    assert received_texts == ["hello", "", "world", ""]
+    assert result.matrix.shape == (4, 4)
+    assert result.ordered_ids == ["a", "b", "c", "d"]
+
+
+def test_open_or_build_corpus_persists_after_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a cold build, ``_load_cache`` directly recovers the corpus."""
+
+    embedder = _make_embedder(model_name="persist-model")
+    tweets_by_id = _fake_tweets(3)
+
+    base_stub = _canned_vectors_factory(dim=4)
+    monkeypatch.setattr(embedder, "_call_embeddings_api", base_stub)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+
+    built = emb.open_or_build_corpus(embedder, tweets_by_id, tmp_path)
+
+    loaded = emb._load_cache(
+        tmp_path / emb.CACHE_NPY_NAME,
+        tmp_path / emb.CACHE_META_NAME,
+        expected_model="persist-model",
+        expected_ids=set(tweets_by_id.keys()),
+    )
+
+    assert loaded is not None
+    assert loaded.ordered_ids == built.ordered_ids
+    assert loaded.model_name == "persist-model"
+    assert np.array_equal(loaded.matrix, built.matrix)
