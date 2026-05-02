@@ -45,7 +45,7 @@
   - _Requirements: 2.7, 2.4_
   - _Boundary: .env.sample_
 
-- [ ] 1.6 Drop `pageindex` from `pyproject.toml` and add `openai`; create `tree.py`, `walker.py`, `ranker.py` skeleton files
+- [x] 1.6 Drop `pageindex` from `pyproject.toml` and add `openai`; create `tree.py`, `walker.py`, `ranker.py` skeleton files
   - In `pyproject.toml`, remove `pageindex` from `[project.dependencies]`; add `openai>=1.0` (the walker calls the SDK directly)
   - Run `uv sync` and confirm `pageindex` is gone from the lockfile / installed env, and `openai` resolves
   - Create `x_likes_mcp/tree.py`, `x_likes_mcp/walker.py`, `x_likes_mcp/ranker.py` as empty placeholder files (one-line docstring each). Tasks 3.2, 3.3b, 3.3c will fill them in.
