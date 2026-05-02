@@ -249,7 +249,7 @@
 
 ## 6. Test infrastructure and tests
 
-- [ ] 6.1 Create `tests/mcp/` test tree with conftest, fixtures, and the network/LLM guard
+- [x] 6.1 Create `tests/mcp/` test tree with conftest, fixtures, and the network/LLM guard
   - Create `tests/mcp/__init__.py`, `tests/mcp/conftest.py`, and `tests/mcp/fixtures/` directory
   - Hand-build `tests/mcp/fixtures/by_month/likes_2025-01.md`, `likes_2025-02.md`, `likes_2025-03.md` matching the post-task-1.1 formatter layout (`## YYYY-MM`, `### [@handle]`, the per-tweet block including the canonical `🔗 [View on X](https://x.com/{handle}/status/{id})` link; no global h1); under 50 lines each
   - Hand-build `tests/mcp/fixtures/likes.json` with four tweets across the three months whose IDs match the per-month file references; engagement counts are non-zero so ranker tests can exercise the formula
@@ -260,7 +260,7 @@
   - _Requirements: 11.1, 11.2, 11.4, 11.5_
   - _Boundary: tests/mcp/_
 
-- [ ] 6.2 (P) Write `test_config.py`
+- [x] 6.2 (P) Write `test_config.py`
   - Test that `load_config(env={"OPENAI_BASE_URL": "x", "OPENAI_MODEL": "m"})` returns a `Config` with the expected paths and `openai_model == "m"`
   - Test that `load_config(env={"OPENAI_BASE_URL": "x"})` raises `ConfigError` whose message contains `"OPENAI_MODEL"`
   - Test that `load_config(env={"OPENAI_MODEL": "m"})` raises `ConfigError` whose message contains `"OPENAI_BASE_URL"`
@@ -275,7 +275,7 @@
   - _Depends: 2.1, 2.3, 6.1_
   - _Boundary: tests/mcp/test_config.py_
 
-- [ ] 6.3 (P) Write `test_tree.py`
+- [x] 6.3 (P) Write `test_tree.py`
   - Test `tree.build_tree(tests/mcp/fixtures/by_month)` returns a `TweetTree` whose `nodes_by_month` keys are exactly the three fixture months
   - Test each `TreeNode` has the right `tweet_id`, `handle`, non-empty `text`, non-empty `raw_section`
   - Test that adding a malformed section to a fixture file (missing the link line) causes that section to be skipped without raising
@@ -287,7 +287,7 @@
   - _Depends: 3.2, 6.1_
   - _Boundary: tests/mcp/test_tree.py_
 
-- [ ] 6.4 (P) Write `test_walker.py`
+- [x] 6.4 (P) Write `test_walker.py`
   - Mock `walker._call_chat_completions` (or equivalent helper). Tests never make real HTTP.
   - Test that `walk(tree, "q", months_in_scope=None, config)` iterates every month
   - Test that `walk(tree, "q", months_in_scope=["2025-01", "2025-03"], config)` iterates only those months (count helper invocations)
@@ -301,7 +301,7 @@
   - _Depends: 3.3b, 6.1_
   - _Boundary: tests/mcp/test_walker.py_
 
-- [ ] 6.5 (P) Write `test_ranker.py`
+- [x] 6.5 (P) Write `test_ranker.py`
   - Pure-function tests with hand-built `WalkerHit` lists, hand-built `Tweet` objects (constructed directly via the dataclass), hand-built `author_affinity` dicts
   - Test `compute_author_affinity` returns `{handle: log1p(count)}` for a list with two tweets from one handle and one from another
   - Test `rank` produces exactly one `ScoredHit` per `WalkerHit` whose tweet is in the map; missing tweets are dropped
@@ -317,7 +317,7 @@
   - _Depends: 3.3c, 6.1_
   - _Boundary: tests/mcp/test_ranker.py_
 
-- [ ] 6.6 (P) Write `test_index.py`
+- [x] 6.6 (P) Write `test_index.py`
   - Test `TweetIndex.open_or_build` against the fixture export with `tree.build_tree` mocked to return a known-shape fake `TweetTree`: cache absent → builds and writes cache; cache fresh (mtime newer than all `.md`) → loads cache and does not call the builder; cache stale (touch one `.md` newer than cache) → rebuilds (assert via call counter on the mock)
   - Test `TweetIndex.open_or_build` against an empty `by_month/` raises `IndexError`
   - Test `TweetIndex._resolve_filter` with the rule matrix from task 3.3a (year-only, year+month_start, year+range, the three error cases)
@@ -334,7 +334,7 @@
   - _Depends: 3.1, 3.2, 3.3a, 3.3b, 3.3c, 3.3d, 3.4, 6.1_
   - _Boundary: tests/mcp/test_index.py_
 
-- [ ] 6.7 (P) Write `test_tools.py`
+- [x] 6.7 (P) Write `test_tools.py`
   - For each of the four tools, test the happy path with a mocked `TweetIndex` and the relevant error paths (invalid input, not found, upstream failure)
   - `search_likes`: empty/whitespace `query` → `invalid_input`; valid `query` with mocked matches → list of dicts with the eight expected keys; valid `query` with full filter triple → `index.search` called with exactly those arguments; year-only filter → `index.search` called with `month_start=None, month_end=None`; `month_start` without `year` → `invalid_input` (the resolver raises `ValueError`, the handler translates); `index.search` raising `WalkerError` → `upstream_failure`
   - `list_months`: returns dict list with `year_month`, `path`, `tweet_count` (some may be `None`)
