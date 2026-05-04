@@ -28,6 +28,8 @@ wheels/
 
 # Output files
 output/
+output/url_cache/
+output/synthesis_compiled/
 *.json
 !cookies.json.example
 *.csv
