@@ -69,6 +69,45 @@ class MonthInfo:
     tweet_count: int | None
 
 
+def _check_filter_deps(
+    year: int | None, month_start: str | None, month_end: str | None
+) -> None:
+    """Reject filter combinations that violate the dependency rules."""
+
+    if month_start is None and month_end is not None:
+        raise ValueError("filter: month_end requires month_start")
+    if month_start is not None and year is None:
+        raise ValueError("filter: month_start requires year")
+
+
+def _parse_month_range(
+    month_start: str, month_end: str | None
+) -> tuple[int, int | None]:
+    """Parse two-digit month strings to ints in ``1..12``.
+
+    Returns ``(start, end)``. ``end`` is ``None`` when ``month_end`` was
+    not supplied. Raises :class:`ValueError` on bad input or out-of-range
+    values, including ``start > end``.
+    """
+
+    try:
+        ms = int(month_start)
+        me = int(month_end) if month_end is not None else None
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "filter: month values must be two-digit numeric strings"
+        ) from exc
+
+    if not (1 <= ms <= 12):
+        raise ValueError("filter: month_start must be in 01..12")
+    if me is not None:
+        if not (1 <= me <= 12):
+            raise ValueError("filter: month_end must be in 01..12")
+        if ms > me:
+            raise ValueError("filter: month_start must be <= month_end")
+    return ms, me
+
+
 def _compute_author_affinity(tweets: list[Tweet]) -> dict[str, float]:
     """Affinity score per handle: ``log1p(count_of_user_likes_from_handle)``.
 
@@ -282,7 +321,6 @@ class TweetIndex:
           - ``month_end`` set requires ``month_start`` set.
           - When both ``month_start`` and ``month_end`` set,
             ``month_start <= month_end``.
-          - All three ``None`` returns ``None`` (every month).
           - ``year`` only spans the whole year (12 months).
           - ``year`` + ``month_start`` only is one month.
           - ``year`` + ``month_start`` + ``month_end`` is the inclusive
@@ -291,36 +329,14 @@ class TweetIndex:
         if year is None and month_start is None and month_end is None:
             return None
 
-        if month_start is None and month_end is not None:
-            raise ValueError("filter: month_end requires month_start")
+        _check_filter_deps(year, month_start, month_end)
 
-        if month_start is not None and year is None:
-            raise ValueError("filter: month_start requires year")
-
-        # year alone -> all 12 months
-        if year is not None and month_start is None:
+        if month_start is None:
             return [f"{year}-{m:02d}" for m in range(1, 13)]
 
-        # Validate month formats and ranges.
-        try:
-            ms = int(month_start) if month_start is not None else None
-            me = int(month_end) if month_end is not None else None
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "filter: month values must be two-digit numeric strings"
-            ) from exc
-
-        if ms is None or not (1 <= ms <= 12):
-            raise ValueError("filter: month_start must be in 01..12")
-        if me is not None and not (1 <= me <= 12):
-            raise ValueError("filter: month_end must be in 01..12")
-
+        ms, me = _parse_month_range(month_start, month_end)
         if me is None:
             return [f"{year}-{ms:02d}"]
-
-        if ms > me:
-            raise ValueError("filter: month_start must be <= month_end")
-
         return [f"{year}-{m:02d}" for m in range(ms, me + 1)]
 
     def _candidate_ids(

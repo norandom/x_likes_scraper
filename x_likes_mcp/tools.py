@@ -111,6 +111,35 @@ def _validate_query(query: Any) -> str:
     return stripped
 
 
+def _validate_year(year: Any) -> None:
+    if year is None:
+        return
+    if isinstance(year, bool) or not isinstance(year, int):
+        raise errors.invalid_input("filter", "year must be an integer")
+    if year < _YEAR_MIN or year > _YEAR_MAX:
+        raise errors.invalid_input(
+            "filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}"
+        )
+
+
+def _validate_month_field(name: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or not _MONTH_RE.match(value):
+        raise errors.invalid_input(
+            "filter", f"{name} must match ^(0[1-9]|1[0-2])$"
+        )
+
+
+def _validate_filter_dependencies(
+    year: Any, month_start: Any, month_end: Any
+) -> None:
+    if month_start is not None and year is None:
+        raise errors.invalid_input("filter", "month_start requires year")
+    if month_end is not None and month_start is None:
+        raise errors.invalid_input("filter", "month_end requires month_start")
+
+
 def _validate_filter(
     year: Any,
     month_start: Any,
@@ -123,32 +152,10 @@ def _validate_filter(
     keeps "filter" as the field name even when the caller hands us a mock
     that bypasses the resolver.
     """
-    if year is not None:
-        if isinstance(year, bool) or not isinstance(year, int):
-            raise errors.invalid_input("filter", "year must be an integer")
-        if year < _YEAR_MIN or year > _YEAR_MAX:
-            raise errors.invalid_input(
-                "filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}"
-            )
-
-    if month_start is not None and (
-        not isinstance(month_start, str) or not _MONTH_RE.match(month_start)
-    ):
-        raise errors.invalid_input(
-            "filter", "month_start must match ^(0[1-9]|1[0-2])$"
-        )
-
-    if month_end is not None and (
-        not isinstance(month_end, str) or not _MONTH_RE.match(month_end)
-    ):
-        raise errors.invalid_input(
-            "filter", "month_end must match ^(0[1-9]|1[0-2])$"
-        )
-
-    if month_start is not None and year is None:
-        raise errors.invalid_input("filter", "month_start requires year")
-    if month_end is not None and month_start is None:
-        raise errors.invalid_input("filter", "month_end requires month_start")
+    _validate_year(year)
+    _validate_month_field("month_start", month_start)
+    _validate_month_field("month_end", month_end)
+    _validate_filter_dependencies(year, month_start, month_end)
 
 
 def _validate_with_why(with_why: Any) -> bool:
