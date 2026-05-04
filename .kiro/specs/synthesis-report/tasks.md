@@ -143,7 +143,7 @@
   - _Depends: 2.5_
 
 - [ ] 5. Integration: orchestrator and the MCP / CLI surface
-- [ ] 5.1 Implement the synthesis orchestrator
+- [x] 5.1 Implement the synthesis orchestrator
   - Validate `ReportOptions` (shape, hops, filter values, paths) and reject unknown shapes / out-of-range hops before any side effect
   - Drive the pipeline: round-1 search → optional round-2 fan-out → optional URL fetch (only when `fetch_urls=True`, including the crawl4ai probe) → KG build → fenced-context assembly → DSPy synthesis → markdown render
   - Load the per-shape compiled program when present and fall back to the un-optimized signature when absent; never fail because a compiled program is missing

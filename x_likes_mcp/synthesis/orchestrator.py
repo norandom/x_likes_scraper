@@ -1,9 +1,415 @@
-"""Synthesis-report orchestrator (placeholder for task 5.1).
+"""Synthesis-report orchestrator for the synthesis-report feature.
 
-The orchestrator is the single ``run_report`` entry point that drives the
-pipeline: round-1 search → optional round-2 fan-out → optional URL fetch
-→ KG build → fenced-context assembly → DSPy synthesis → markdown render.
-This file is intentionally empty until task 5.1 fills it in.
+The orchestrator is the single ``run_report`` entry point that drives
+the pipeline:
+
+    round-1 search
+        → optional round-2 fan-out (when ``hops == 2``)
+        → optional URL fetch (only when ``options.fetch_urls=True``,
+          including the crawl4ai startup probe)
+        → KG build
+        → fenced-context assembly
+        → DSPy synthesis
+        → markdown render
+
+Boundary discipline: this module never writes to disk on its own. The
+URL cache writes its own files behind the scenes, but those are gated
+by ``fetch_urls=True``. The CLI / MCP layer is responsible for
+persisting the rendered markdown.
+
+Every downstream exception is translated into :class:`OrchestratorError`
+with a structured ``category`` so the boundary can map errors to the
+right surface (HTTP code, CLI exit code, MCP error envelope) without
+sniffing exception types from the synthesis package.
+
+See ``.kiro/specs/synthesis-report/design.md`` (``orchestrator``
+component) and requirements 1.1, 1.3, 1.4, 5.2, 6.3, 9.4, 12.4.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ..config import Config, ConfigError
+from .compiled import load_compiled
+from .context import FencingBudget, build_fenced_context
+from .dspy_modules import (
+    SynthesisError,
+    SynthesisValidationError,
+    configure_lm,
+    extract_entities,
+    synthesize,
+)
+from .entities import extract_regex
+from .fetcher import ContainerUnreachable, fetch_all, probe_container
+from .kg import (
+    KG,
+    Edge,
+    EdgeKind,
+    Node,
+    NodeKind,
+    concept_id,
+    domain_id,
+    handle_id,
+    hashtag_id,
+    query_id,
+    tweet_id,
+)
+from .multihop import (
+    HopsOutOfRange,
+    fuse_results,
+    run_round_one,
+    run_round_two,
+    validate_hops,
+)
+from .report_render import render_empty_report, render_report
+from .shapes import ReportShape, parse_report_shape
+from .types import Entity, EntityKind, FetchedUrl, ReportOptions, ReportResult
+from .url_cache import UrlCache
+
+if TYPE_CHECKING:  # pragma: no cover - type-only imports
+    from x_likes_mcp.index import TweetIndex
+    from x_likes_mcp.ranker import ScoredHit
+
+
+__all__ = [
+    "OrchestratorError",
+    "run_report",
+]
+
+
+# ---------------------------------------------------------------------------
+# Error type
+# ---------------------------------------------------------------------------
+
+
+class OrchestratorError(Exception):
+    """Top-level orchestrator failure with a structured ``category``.
+
+    The boundary layer (CLI / MCP) maps ``category`` values to surface
+    representations:
+
+    * ``"invalid_input"`` — the caller supplied an unknown shape, an
+      out-of-range ``hops``, or a malformed filter shape. Translates to
+      a 400-style response.
+    * ``"config"`` — the LM endpoint env vars are missing. Translates
+      to a configuration-error response.
+    * ``"upstream"`` — a downstream dependency (LM, crawl4ai container)
+      is unreachable or returned an unrecoverable error. Translates to
+      a 502-style response.
+    * ``"validation"`` — the synthesizer kept citing unknown source IDs
+      after the corrective retry. Translates to a synthesis-validation
+      response.
+    """
+
+    def __init__(self, category: str, message: str) -> None:
+        super().__init__(message)
+        self.category = category
+        self.message = message
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def run_report(
+    index: TweetIndex,
+    options: ReportOptions,
+    *,
+    config: Config,
+) -> ReportResult:
+    """Drive the full synthesis-report pipeline.
+
+    See module docstring for the pipeline order. Every downstream
+    exception is translated into :class:`OrchestratorError` so the
+    boundary layer never has to import the leaf-module exception
+    families.
+    """
+
+    # 1) Validation (no side effects yet) --------------------------------
+    try:
+        shape = parse_report_shape(options.shape)
+    except ValueError as exc:
+        raise OrchestratorError("invalid_input", str(exc)) from exc
+
+    try:
+        validate_hops(options.hops, max_hops=config.synthesis_max_hops)
+    except HopsOutOfRange as exc:
+        raise OrchestratorError("invalid_input", str(exc)) from exc
+
+    # ``year`` is a positive int or ``None``; the index handles the rest
+    # of the filter validation but a negative year here would later
+    # surface as a confusing search miss, so reject it early.
+    if options.year is not None and options.year <= 0:
+        raise OrchestratorError(
+            "invalid_input",
+            f"year={options.year} is not a positive integer",
+        )
+
+    # 2) Round-1 search --------------------------------------------------
+    hits_round_one = run_round_one(index, options)
+
+    # 3) Empty corpus shortcut (Req 9.4) --------------------------------
+    if not hits_round_one:
+        markdown = render_empty_report(options)
+        return ReportResult(
+            markdown=markdown,
+            shape=shape,
+            used_hops=1,
+            fetched_url_count=0,
+            synthesis_token_count=0,
+        )
+
+    # 4) Configure LM (only when we will actually synthesize) -----------
+    try:
+        configure_lm(config)
+    except ConfigError as exc:
+        raise OrchestratorError("config", str(exc)) from exc
+
+    # 5) Build round-1 KG -----------------------------------------------
+    kg = KG()
+    kg.add_node(Node(id=query_id(), kind=NodeKind.QUERY, label=options.query, weight=1.0))
+    _populate_kg_from_hits(
+        kg=kg,
+        hits=hits_round_one,
+        index=index,
+        edge_kind=EdgeKind.RECALL_FOR,
+    )
+
+    # 6) Round-2 fan-out (if hops==2) -----------------------------------
+    if options.hops >= 2:
+        hits_round_two = run_round_two(
+            index,
+            options,
+            kg,
+            k=config.synthesis_round_two_k,
+        )
+        fused_hits = fuse_results(hits_round_one, hits_round_two)
+        # Extend the KG with round-2 entities so the synthesizer benefits
+        # from a richer graph; round-2 hits not already in round-1 still
+        # contribute their entities.
+        round_two_only = [
+            hit
+            for hit in hits_round_two
+            if hit.tweet_id not in {h.tweet_id for h in hits_round_one}
+        ]
+        if round_two_only:
+            _populate_kg_from_hits(
+                kg=kg,
+                hits=round_two_only,
+                index=index,
+                edge_kind=EdgeKind.RECALL_FOR,
+            )
+    else:
+        fused_hits = hits_round_one
+
+    # 7) Optional URL fetch (Req 3.1, 3.2, 12.4) ------------------------
+    fetched_urls: list[FetchedUrl] = []
+    if options.fetch_urls:
+        try:
+            probe_container(config.crawl4ai_base_url)
+        except ContainerUnreachable as exc:
+            raise OrchestratorError(
+                "upstream",
+                f"crawl4ai container unreachable: {exc}",
+            ) from exc
+
+        cache = UrlCache(config.url_cache_dir, ttl_days=config.url_cache_ttl_days)
+        urls = _collect_urls(fused_hits, index)
+        if urls:
+            fetched_urls = fetch_all(
+                urls,
+                crawl4ai_base_url=config.crawl4ai_base_url,
+                cache=cache,
+                max_body_bytes=config.synthesis_per_source_bytes,
+                private_allowlist=config.url_fetch_allowed_private_cidrs,
+            )
+
+    # 8) Build fenced synthesis context ---------------------------------
+    budget = FencingBudget(
+        per_url_body_bytes=config.synthesis_per_source_bytes,
+        total_bytes=config.synthesis_total_context_bytes,
+    )
+    fenced_blob, known_source_ids = build_fenced_context(
+        options.query,
+        shape,
+        list(fused_hits),
+        list(fetched_urls),
+        kg,
+        budget,
+    )
+
+    # 9) Load compiled program (Req 6.3) -------------------------------
+    compiled_root = config.output_dir / "synthesis_compiled"
+    program = load_compiled(shape, compiled_root)
+
+    # 10) Run synthesis (Req 1.1) --------------------------------------
+    month_buckets: list[str] | None = None
+    if shape is ReportShape.TREND:
+        month_buckets = sorted(
+            {ym for hit in fused_hits if (ym := getattr(hit, "year_month", None))}
+        )
+
+    try:
+        synthesis_result = synthesize(
+            shape,
+            options.query,
+            fenced_blob,
+            known_source_ids=known_source_ids,
+            month_buckets=month_buckets,
+            program=program,
+        )
+    except SynthesisValidationError as exc:
+        raise OrchestratorError(
+            "validation",
+            f"synthesis validation failed: {exc}",
+        ) from exc
+    except SynthesisError as exc:
+        raise OrchestratorError(
+            "upstream",
+            f"synthesis call failed: {exc}",
+        ) from exc
+
+    # 11) Render --------------------------------------------------------
+    markdown = render_report(
+        shape,
+        options,
+        list(fused_hits),
+        list(fetched_urls),
+        kg,
+        synthesis_result,
+    )
+
+    # 12) Return --------------------------------------------------------
+    return ReportResult(
+        markdown=markdown,
+        shape=shape,
+        used_hops=options.hops,
+        fetched_url_count=len(fetched_urls),
+        synthesis_token_count=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _hit_text(hit: ScoredHit, index: TweetIndex) -> str:
+    """Return the best-effort text for ``hit``.
+
+    Prefers an orchestrator-injected ``snippet`` (the search seam adds
+    one for some shapes), falls back to the underlying tweet body via
+    ``index.tweets_by_id``, and returns ``""`` when neither is present.
+    """
+
+    snippet = getattr(hit, "snippet", None)
+    if snippet:
+        return str(snippet)
+    tweet = index.tweets_by_id.get(hit.tweet_id)
+    if tweet is None:
+        return ""
+    return str(getattr(tweet, "text", "") or "")
+
+
+def _hit_handle(hit: ScoredHit, index: TweetIndex) -> str:
+    """Return the screen-name for ``hit`` or ``""`` if unknown."""
+
+    handle = getattr(hit, "handle", None)
+    if handle:
+        return str(handle)
+    tweet = index.tweets_by_id.get(hit.tweet_id)
+    if tweet is None or tweet.user is None:
+        return ""
+    return str(tweet.user.screen_name or "")
+
+
+def _populate_kg_from_hits(
+    *,
+    kg: KG,
+    hits: list[ScoredHit],
+    index: TweetIndex,
+    edge_kind: EdgeKind,
+) -> None:
+    """Populate ``kg`` with one tweet node per hit plus its entities.
+
+    Per design + Req 5.2, the regex extractor runs first; only the hits
+    where the regex pass returned nothing trigger the DSPy fallback.
+    """
+
+    for hit in hits:
+        text = _hit_text(hit, index)
+        handle = _hit_handle(hit, index)
+
+        tnode_id = tweet_id(hit.tweet_id)
+        kg.add_node(Node(id=tnode_id, kind=NodeKind.TWEET, label=hit.tweet_id, weight=1.0))
+        kg.add_edge(Edge(src=query_id(), dst=tnode_id, kind=edge_kind))
+
+        # Author edge (handle:<screen_name>).
+        if handle:
+            hnode_id = handle_id(handle)
+            kg.add_node(Node(id=hnode_id, kind=NodeKind.HANDLE, label=handle, weight=1.0))
+            kg.add_edge(Edge(src=tnode_id, dst=hnode_id, kind=EdgeKind.AUTHORED_BY))
+
+        # Wire entity extraction explicitly so the orchestrator's test
+        # seam (monkeypatching ``orchestrator.extract_regex`` and
+        # ``orchestrator.extract_entities``) takes effect. Per Req 5.2
+        # the DSPy fallback fires only when the regex pass returned
+        # nothing for that hit.
+        entities = extract_regex(text, [])
+        if not entities:
+            entities = extract_entities(text)
+
+        for entity in entities:
+            _add_entity_to_kg(kg, entity, tnode_id)
+
+
+def _add_entity_to_kg(kg: KG, entity: Entity, source_tweet_id: str) -> None:
+    """Add a single entity node and the corresponding edge.
+
+    Maps each :class:`EntityKind` to its KG namespace + edge kind.
+    Concept slugs are passed through ``concept_id`` so the KG and the
+    regex extractor share the same canonicalization.
+    """
+
+    if entity.kind is EntityKind.HANDLE:
+        node_id = handle_id(entity.value)
+        node_kind = NodeKind.HANDLE
+        edge_kind = EdgeKind.MENTIONS
+    elif entity.kind is EntityKind.HASHTAG:
+        node_id = hashtag_id(entity.value)
+        node_kind = NodeKind.HASHTAG
+        edge_kind = EdgeKind.MENTIONS
+    elif entity.kind is EntityKind.DOMAIN:
+        node_id = domain_id(entity.value)
+        node_kind = NodeKind.DOMAIN
+        edge_kind = EdgeKind.CITES
+    elif entity.kind is EntityKind.CONCEPT:
+        node_id = concept_id(entity.value)
+        node_kind = NodeKind.CONCEPT
+        edge_kind = EdgeKind.MENTIONS
+    else:  # pragma: no cover - EntityKind is a closed StrEnum.
+        return
+
+    kg.add_node(Node(id=node_id, kind=node_kind, label=entity.value, weight=entity.weight))
+    kg.add_edge(Edge(src=source_tweet_id, dst=node_id, kind=edge_kind))
+
+
+def _collect_urls(hits: list[ScoredHit], index: TweetIndex) -> list[str]:
+    """Collect the URL list from each hit's underlying tweet, preserving order."""
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for hit in hits:
+        tweet = index.tweets_by_id.get(hit.tweet_id)
+        if tweet is None:
+            continue
+        for url in getattr(tweet, "urls", []) or []:
+            if not isinstance(url, str):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+    return urls
