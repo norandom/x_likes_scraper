@@ -259,6 +259,71 @@ def _entry_to_hit(
 # ---------------------------------------------------------------------------
 # Public entry point
 
+def _resolve_months(
+    tree: TweetTree, months_in_scope: list[str] | None
+) -> list[str]:
+    """Return the months to walk, in caller-determined order.
+
+    ``None`` means every month, ascending. A non-``None`` list keeps the
+    caller's order (TweetIndex already builds it chronologically) and
+    drops months that the tree has no nodes for.
+    """
+
+    if months_in_scope is None:
+        return sorted(tree.nodes_by_month.keys())
+    return [m for m in months_in_scope if m in tree.nodes_by_month]
+
+
+def _assert_walker_configured(config: Config) -> None:
+    """Raise :class:`WalkerError` when the opt-in walker config is missing.
+
+    The default search path does not call the walker, so the config can
+    legitimately be unset. We surface a clear error here instead of
+    letting the OpenAI SDK fail later with a less specific message.
+    """
+
+    if not config.openai_base_url or not config.openai_model:
+        raise WalkerError(
+            "Walker invoked but OPENAI_BASE_URL and/or OPENAI_MODEL are not "
+            "set. The walker explainer is opt-in via search_likes(with_why=true); "
+            "set both variables in .env to enable it."
+        )
+
+
+def _walk_chunk(
+    client: OpenAI,
+    model: str,
+    query: str,
+    chunk: list[Any],
+    month: str,
+    chunk_index: int,
+) -> list[WalkerHit]:
+    """Process one chunk: call the LLM, parse, return validated hits."""
+
+    valid_ids = {node.tweet_id for node in chunk}
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": _build_user_prompt(query, chunk)},
+    ]
+
+    try:
+        raw = _call_chat_completions(client, model, messages)
+        parsed = _parse_response(raw)
+    except WalkerError:
+        raise
+    except Exception as exc:
+        raise WalkerError(
+            f"LLM call failed for month {month} chunk {chunk_index}: {exc}"
+        ) from exc
+
+    hits: list[WalkerHit] = []
+    for entry in _coerce_hits(parsed):
+        hit = _entry_to_hit(entry, valid_ids)
+        if hit is not None:
+            hits.append(hit)
+    return hits
+
+
 def walk(
     tree: TweetTree,
     query: str,
@@ -287,35 +352,17 @@ def walk(
         WalkerError: On any per-chunk LLM failure (HTTP error, malformed
             JSON that cannot be salvaged).
     """
-    if months_in_scope is None:
-        months = sorted(tree.nodes_by_month.keys())
-    else:
-        # Preserve the caller's order, but only keep months we actually have.
-        # The spec says "iterate only the listed months that exist in the
-        # tree"; we don't sort here because the caller (TweetIndex) already
-        # builds the list in chronological order.
-        months = [m for m in months_in_scope if m in tree.nodes_by_month]
 
+    months = _resolve_months(tree, months_in_scope)
     if not months:
         return []
 
-    # The walker config is opt-in; the default search path doesn't need
-    # it. Surface a clear error here rather than letting the OpenAI SDK
-    # fail with a less specific message.
-    if not config.openai_base_url or not config.openai_model:
-        raise WalkerError(
-            "Walker invoked but OPENAI_BASE_URL and/or OPENAI_MODEL are not "
-            "set. The walker explainer is opt-in via search_likes(with_why=true); "
-            "set both variables in .env to enable it."
-        )
+    _assert_walker_configured(config)
 
     # The SDK reads OPENAI_BASE_URL from os.environ; config.load_config wrote
     # it there. We pass api_key explicitly because local OpenAI-compatible
     # proxies often don't require auth (the config allows an empty key), but
-    # the SDK constructor still demands *some* string. The empty-string
-    # placeholder is a no-op for proxies that ignore the header and the env
-    # var still wins when it's set (config writes OPENAI_API_KEY too in that
-    # case).
+    # the SDK constructor still demands *some* string.
     client = OpenAI(api_key=config.openai_api_key or "not-required")
     hits: list[WalkerHit] = []
 
@@ -325,29 +372,15 @@ def walk(
             chunk = nodes[chunk_start : chunk_start + chunk_size]
             if not chunk:
                 continue
-            valid_ids = {node.tweet_id for node in chunk}
-
-            messages = [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_prompt(query, chunk)},
-            ]
-
-            try:
-                raw = _call_chat_completions(
-                    client, config.openai_model, messages
+            hits.extend(
+                _walk_chunk(
+                    client,
+                    config.openai_model,
+                    query,
+                    chunk,
+                    month,
+                    chunk_start // chunk_size,
                 )
-                parsed = _parse_response(raw)
-            except WalkerError:
-                raise
-            except Exception as exc:
-                raise WalkerError(
-                    f"LLM call failed for month {month} chunk "
-                    f"{chunk_start // chunk_size}: {exc}"
-                ) from exc
-
-            for entry in _coerce_hits(parsed):
-                hit = _entry_to_hit(entry, valid_ids)
-                if hit is not None:
-                    hits.append(hit)
+            )
 
     return hits
