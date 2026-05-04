@@ -190,7 +190,7 @@
   - _Boundary: synthesis end-to-end_
   - _Depends: 5.1_
 
-- [ ] 6.2 End-to-end CLI test
+- [x] 6.2 End-to-end CLI test
   - Invoke the CLI with `--report synthesis --query "..." --out tmp.md` against a fixture index and assert that `tmp.md` exists, contains a `mermaid mindmap` fenced block, and the process exits 0
   - Invoke with `--fetch-urls` while the crawl4ai endpoint is unreachable and assert exit status 2 with an error message that names the endpoint and the override env var
   - _Requirements: 9.1, 9.5, 3.3_
