@@ -25,7 +25,7 @@
   - _Requirements: 7.1, 7.2_
   - _Boundary: sanitize_
 
-- [ ] 1.4 Create the `synthesis` subpackage skeleton with shared types and per-shape config
+- [x] 1.4 Create the `synthesis` subpackage skeleton with shared types and per-shape config
   - Lay down the empty modules for the orchestrator, leaf modules, and the public surface
   - Define `ReportShape` (brief / synthesis / trend), `ReportOptions`, `ReportResult`, and the supporting dataclasses (`FetchedUrl`, `Entity`, `Claim`, `Section`, `MonthSummary`) the design pins
   - Encode each shape's length and section directives plus the `MAX_MINDMAP_DEPTH=4` cap in one place so the renderer and synthesizer read the same numbers
