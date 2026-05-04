@@ -108,16 +108,45 @@ exporter.export_all()
 
 Exporting tens of thousands of likes can take hours, and the run will eventually hit a network blip or a rate-limit wait. The exporter writes progress to `.export_checkpoint.json` and `.export_tweets.pkl` in the output directory as it goes. Pass `--resume` on the CLI (or `resume=True` in Python) to pick up where it stopped. The checkpoint holds the tweets fetched so far and the current pagination cursor; on resume the exporter merges new tweets with the saved set and deduplicates by ID. The checkpoint files are deleted automatically once an export finishes.
 
-## MCP Server
+## Search
 
-`python -m x_likes_mcp` (or `uv run x-likes-mcp`) starts a stdio MCP server that exposes the like history through four tools:
+The hybrid retrieval pipeline (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion, then re-ranked by a heavy-ranker-style scorer) is reachable two ways. Both share the same on-disk cache, so warming one warms the other.
 
-- `search_likes(query, year, month_start, month_end, with_why)` — natural-language search. The default path runs hybrid recall (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion) over the entire corpus, then re-ranks with the engagement-and-affinity heavy ranker. No chat-completions call on the default path; one OpenRouter `/v1/embeddings` request per query. The optional date filter narrows the candidate set. Pass `with_why=true` to opt into a single walker chat-completions call that populates the `why` field on the top-20 results.
+- **Command-line** (`uv run x-likes-mcp --search "query"`): standalone, no MCP client needed. Good for one-off queries, scripting, and cache warm-up. See "Command-line search" below.
+- **MCP server** (`uv run x-likes-mcp`, no flags): stdio MCP server for Claude Code, Claude Desktop, and other MCP clients. Only needed if you want the search reachable from an LLM session. See "Registering with Claude Code" below.
+
+The MCP server exposes four tools:
+
+- `search_likes(query, year, month_start, month_end, with_why)` — natural-language search. The default path runs hybrid recall (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion) over the entire corpus, then re-ranks with the heavy ranker. No chat-completions call on the default path; one OpenRouter `/v1/embeddings` request per query. The optional date filter narrows the candidate set. Pass `with_why=true` to opt into a single walker chat-completions call that populates the `why` field on the top-20 results.
 - `list_months()` — months for which per-month Markdown exists, reverse-chronologically.
 - `get_month(year_month)` — raw Markdown for one month.
 - `read_tweet(tweet_id)` — one tweet's metadata by id.
 
-The ranker design is borrowed from `twitter/the-algorithm`'s heavy ranker for the features the export already has, not a port of it.
+The ranker design is borrowed from `twitter/the-algorithm`'s heavy ranker for the features the export already has, not a port of it. Default weights are tuned for search: cosine relevance dominates, engagement is a soft prior. See "Configuration" for the formula and override knobs.
+
+### Command-line search
+
+```bash
+# Build or load the index, print a summary, exit (warms the cache).
+uv run x-likes-mcp --init
+
+# Run a query against the local corpus and print ranked hits.
+uv run x-likes-mcp --search "AI pentesting" --limit 5
+
+# Filter by year or month range.
+uv run x-likes-mcp --search "rust async" --year 2025 --limit 10
+uv run x-likes-mcp --search "kubernetes" --month-start 2025-01 --month-end 2025-06
+
+# Opt into the walker explainer (one chat-completions call; needs OPENAI_*).
+uv run x-likes-mcp --search "system design" --with-why --limit 5
+
+# Machine-readable output (one JSON object per line) for scripting.
+uv run x-likes-mcp --search "graph databases" --json | jq '.tweet_id'
+```
+
+Each hit prints as two lines: a metadata header (score, walker relevance, year-month, handle, tweet id), then the snippet. The snippet has `t.co` shortlinks stripped and the resolved URLs appended after the prose. If you ran `./scrape.sh` with media downloads enabled, the printer also lists each downloaded media file as a `file://` link, which iTerm2, Kitty, Wezterm, and VS Code open on click.
+
+First invocation embeds the whole corpus (30-90 seconds with the default model). Every later run hits the on-disk cache and starts in under a second.
 
 ### Prerequisites
 
@@ -128,7 +157,7 @@ The ranker design is borrowed from `twitter/the-algorithm`'s heavy ranker for th
 
 ### Why hosted dense embeddings (and not a local transformer)
 
-The dense retrieval path is network-based rather than running a local transformer. The maintainer's primary platform (Intel macOS x86_64) has no modern PyTorch or ONNX Runtime wheels — `sentence-transformers` and `fastembed` both refuse to install. OpenRouter exposes modern embedding models (default: NVIDIA's Nemotron VL 1B encoder) through the OpenAI-shape `/v1/embeddings` endpoint, which the existing `openai` SDK can reach by changing `base_url`. No new SDK dep, no transformer model in-process. The hybrid recall adds one new pure-python dep — `rank_bm25>=0.2`, ~50 KB, no native code.
+The dense retrieval path is network-based rather than running a local transformer. The maintainer's primary platform (Intel macOS x86_64) has no recent PyTorch or ONNX Runtime wheels: `sentence-transformers` and `fastembed` both refuse to install. OpenRouter serves embedding models (default: `openai/text-embedding-3-small`, 1536-dim) through the OpenAI-shape `/v1/embeddings` endpoint, which the existing `openai` SDK can reach by changing `base_url`. No new SDK dep, no transformer model in-process. The hybrid recall adds one new pure-python dep: `rank_bm25>=0.2`, ~50 KB, no native code.
 
 ### Configuration
 
@@ -158,7 +187,7 @@ OPENAI_MODEL=claude-opus-4-1-20250805
 
 The `openai` Python SDK reads `OPENAI_BASE_URL` from the process environment at client-construction time, so any OpenAI-compatible endpoint works. The model string is what the endpoint expects (e.g. an Anthropic model name if the proxy maps OpenAI requests onto an Anthropic backend). These three are unused on the default path and only consulted when a request sets `with_why=true`.
 
-Optional ranker weights (override the in-code defaults):
+Optional ranker weights (override the in-code defaults). Shell environment variables now win over `.env` file values, so a one-shot `RANKER_W_RELEVANCE=40 uv run x-likes-mcp --search ...` takes effect without editing the file:
 
 ```ini
 # Final score for a candidate tweet:
@@ -171,19 +200,24 @@ Optional ranker weights (override the in-code defaults):
 #         + recency_decay(created_at, anchor) * W_RECENCY
 #         + verified_flag * W_VERIFIED
 #         + has_media_flag * W_MEDIA
-RANKER_W_RELEVANCE=10.0
-RANKER_W_FAVORITE=2.0
-RANKER_W_RETWEET=2.5
-RANKER_W_REPLY=1.0
-RANKER_W_VIEW=0.5
-RANKER_W_AFFINITY=3.0
+#
+# Defaults are tuned for search: relevance dominates engagement so
+# niche queries are not buried by popular adjacent tweets. With cosine
+# ``walker_relevance`` in [0, 1] the maximum relevance contribution is
+# 80, while log1p of typical engagement counts contributes 1-3 each.
+RANKER_W_RELEVANCE=80.0
+RANKER_W_FAVORITE=0.5
+RANKER_W_RETWEET=0.5
+RANKER_W_REPLY=0.3
+RANKER_W_VIEW=0.1
+RANKER_W_AFFINITY=1.0
 RANKER_W_RECENCY=1.5
 RANKER_W_VERIFIED=0.5
 RANKER_W_MEDIA=0.3
 RANKER_RECENCY_HALFLIFE_DAYS=180
 ```
 
-`author_affinity[handle]` is precomputed from the user's own like history as `log1p(count_of_likes_from_handle)`. It captures who you keep returning to.
+`author_affinity[handle]` is precomputed from the user's own like history as `log1p(count_of_likes_from_handle)`. It captures who you keep returning to. To switch to feed-style recommendation (engagement leads, relevance is a soft prior), raise the engagement weights and lower `RANKER_W_RELEVANCE`.
 
 ### Registering with Claude Code
 
