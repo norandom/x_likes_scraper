@@ -156,79 +156,69 @@ class BM25Index:
     ) -> list[tuple[str, float]]:
         """Return up to ``k`` ``(tweet_id, bm25_score)`` pairs, descending.
 
-        Algorithm:
-
-        1. Validate ``k`` (must be >= 1; ``ValueError`` otherwise).
-        2. Tokenize the query; if it yields no tokens, return ``[]``.
-        3. Short-circuit on the empty-corpus sentinel.
-        4. Short-circuit on ``restrict_to_ids == set()`` (the literal
-           empty set means "no candidates allowed", distinct from
-           ``None`` which means "no restriction").
-        5. Compute scores via :meth:`BM25Okapi.get_scores`; mask out
-           non-restricted positions to ``-inf`` if ``restrict_to_ids``
-           is given. Masking with ``-inf`` ensures masked rows can
-           never appear in the top-k regardless of how rank_bm25
-           scores them.
-        6. Take the top-k indices by descending score, drop any
-           ``-inf`` survivors (the "fewer than k candidates after
-           masking" case), and return ``(ordered_ids[i],
-           float(scores[i]))`` in descending score order.
-
-        When the restricted scope is smaller than ``k`` we return only
-        the surviving candidates, never padded to ``k`` (Requirement
-        5.3 / 5.4).
+        ``restrict_to_ids=None`` means "no restriction"; ``set()`` means
+        "no candidates allowed" and always returns ``[]``. When the
+        restricted scope is smaller than ``k`` we return only the
+        surviving candidates, never padded to ``k`` (Requirement 5.3 /
+        5.4).
         """
 
         if k <= 0:
             raise ValueError(f"k must be >= 1, got {k}")
 
         tokens = tokenize(query)
-        if not tokens:
+        if not tokens or not self.ordered_ids or self.bm25 is None:
             return []
-
-        if not self.ordered_ids or self.bm25 is None:
-            return []
-
-        # ``restrict_to_ids=set()`` is distinct from ``None``: the user
-        # asked for "no candidates allowed", which always returns [].
         if restrict_to_ids is not None and not restrict_to_ids:
             return []
 
         scores = np.asarray(self.bm25.get_scores(tokens), dtype=np.float64)
+        scores = self._apply_restrict_mask(scores, restrict_to_ids)
+        if scores is None:
+            return []
 
-        if restrict_to_ids is not None:
-            masked = np.full_like(scores, -np.inf)
-            for i, tid in enumerate(self.ordered_ids):
-                if tid in restrict_to_ids:
-                    masked[i] = scores[i]
-            scores = masked
+        return [
+            (self.ordered_ids[int(i)], float(scores[i]))
+            for i in _top_k_indices(scores, k)
+            if np.isfinite(scores[i])
+        ]
 
-            # If no corpus id overlapped with the restrict set, every
-            # entry is -inf -> return [] without touching argpartition.
-            if not np.any(np.isfinite(scores)):
-                return []
+    def _apply_restrict_mask(
+        self,
+        scores: np.ndarray,
+        restrict_to_ids: set[str] | None,
+    ) -> np.ndarray | None:
+        """Set non-restricted positions to ``-inf`` so they cannot win.
 
-        # Take the top-k indices by descending score. ``argpartition``
-        # is O(N), then we sort just the top-k slice.
-        n = scores.shape[0]
-        take = min(k, n)
-        if take == n:
-            top_idx = np.argsort(-scores, kind="stable")
-        else:
-            # ``argpartition`` puts the top-``take`` indices in the
-            # first ``take`` positions (in arbitrary order); sort that
-            # slice descending.
-            partition = np.argpartition(-scores, take - 1)[:take]
-            order = np.argsort(-scores[partition], kind="stable")
-            top_idx = partition[order]
+        Returns the (possibly-masked) array. Returns ``None`` when the
+        restrict set has zero overlap with the corpus — caller should
+        short-circuit to ``[]`` without touching argpartition.
+        """
 
-        results: list[tuple[str, float]] = []
-        for i in top_idx:
-            score = scores[i]
-            if not np.isfinite(score):
-                # Drop masked-out survivors (when the restrict set is
-                # smaller than ``k``).
-                continue
-            results.append((self.ordered_ids[int(i)], float(score)))
+        if restrict_to_ids is None:
+            return scores
 
-        return results
+        masked = np.full_like(scores, -np.inf)
+        for i, tid in enumerate(self.ordered_ids):
+            if tid in restrict_to_ids:
+                masked[i] = scores[i]
+        if not np.any(np.isfinite(masked)):
+            return None
+        return masked
+
+
+def _top_k_indices(scores: np.ndarray, k: int) -> np.ndarray:
+    """Return the top-``k`` indices of ``scores``, descending.
+
+    Uses ``argpartition`` for the partial-sort case (O(N) plus a small
+    sort over the slice) and ``argsort`` when the caller asks for the
+    full ranking.
+    """
+
+    n = scores.shape[0]
+    take = min(k, n)
+    if take == n:
+        return np.argsort(-scores, kind="stable")
+    partition = np.argpartition(-scores, take - 1)[:take]
+    order = np.argsort(-scores[partition], kind="stable")
+    return partition[order]
