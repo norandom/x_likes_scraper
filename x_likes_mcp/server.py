@@ -43,6 +43,17 @@ _SEARCH_HIT_SCHEMA: dict[str, Any] = {
         "tweet_id": {"type": "string"},
         "year_month": {"type": "string"},
         "handle": {"type": "string"},
+        "tweet_url": {
+            "type": "string",
+            "description": (
+                "Canonical ``https://x.com/{handle}/status/{tweet_id}`` "
+                "URL for the hit, built on the server. The handle must "
+                "look like a real Twitter handle "
+                "(``^[A-Za-z0-9_]{1,15}$``) and the tweet id must be "
+                "all digits; anything else falls back to "
+                "``https://x.com/i/status/{id}``."
+            ),
+        },
         "snippet": {"type": "string"},
         "urls": {
             "type": "array",

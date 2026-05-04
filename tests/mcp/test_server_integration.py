@@ -166,6 +166,7 @@ def test_dispatch_search_likes_returns_documented_payload(
         "tweet_id",
         "year_month",
         "handle",
+        "tweet_url",
         "snippet",
         "urls",
         "score",
@@ -177,6 +178,9 @@ def test_dispatch_search_likes_returns_documented_payload(
     assert hit["why"] == ""
     # walker_relevance is the cosine score, clamped to [0, 1].
     assert 0.0 <= hit["walker_relevance"] <= 1.0
+    # tweet_url is server-built; it must be a canonical x.com link.
+    assert hit["tweet_url"].startswith("https://x.com/")
+    assert hit["tweet_id"] in hit["tweet_url"]
 
 
 def test_dispatch_search_likes_with_why_true_integrates(
@@ -225,6 +229,7 @@ def test_dispatch_search_likes_with_why_true_integrates(
             "tweet_id",
             "year_month",
             "handle",
+            "tweet_url",
             "snippet",
             "urls",
             "score",

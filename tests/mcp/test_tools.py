@@ -770,6 +770,7 @@ def test_search_likes_shapes_results_with_documented_keys() -> None:
         "tweet_id",
         "year_month",
         "handle",
+        "tweet_url",
         "snippet",
         "urls",
         "score",
@@ -1013,3 +1014,39 @@ def test_read_tweet_omits_falsy_fields() -> None:
     assert "view_count" not in result
     assert "like_count" not in result
     assert "retweet_count" not in result
+
+
+# ---------------------------------------------------------------------------
+# _build_status_url
+
+
+def test_build_status_url_returns_canonical_form_for_valid_handle_and_id() -> None:
+    assert tools._build_status_url("alice_bob", "12345") == "https://x.com/alice_bob/status/12345"
+
+
+@pytest.mark.parametrize(
+    "bad_handle",
+    [
+        "../etc",
+        "with/slash",
+        "with space",
+        "this_handle_is_way_too_long_for_twitter",  # >15 chars
+        "",
+    ],
+)
+def test_build_status_url_falls_back_to_i_status_for_bad_handle(bad_handle: str) -> None:
+    """A handle that doesn't match Twitter's format falls back to the
+    ``/i/status/`` form so the link still resolves on X's side."""
+
+    out = tools._build_status_url(bad_handle, "12345")
+    assert out == "https://x.com/i/status/12345"
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["", "abc", "12 34", "../1234", "12.34"],
+)
+def test_build_status_url_returns_empty_for_non_numeric_id(bad_id: str) -> None:
+    """No usable id, no link. The caller should drop the field."""
+
+    assert tools._build_status_url("alice", bad_id) == ""

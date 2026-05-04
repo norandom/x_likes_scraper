@@ -50,6 +50,10 @@ _DEFAULT_TOP_N = 50
 _MONTH_RE = re.compile(r"^(0[1-9]|1[0-2])$")
 _YEAR_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 _TWEET_ID_RE = re.compile(r"^\d+$")
+# Twitter handles are 1-15 chars: letters, digits, or underscore. We
+# check the value before putting it in a URL because tweet.user.screen_name
+# comes from the API, which can return weird values.
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 
 # Year bounds: Twitter launched in 2006; upper bound is loose (the server
 # schema layer in server.py pins the upper bound to the current year).
@@ -95,9 +99,26 @@ def _tweet_url(tweet: Any) -> str:
     """Canonical URL for a tweet; falls back to the i/status path when the
     handle is empty (older anonymized rows)."""
     handle = tweet.user.screen_name if tweet.user is not None else ""
-    if handle:
-        return f"https://x.com/{handle}/status/{tweet.id}"
-    return f"https://x.com/i/status/{tweet.id}"
+    return _build_status_url(handle, tweet.id)
+
+
+def _build_status_url(handle: str, tweet_id: str) -> str:
+    """Build the canonical ``https://x.com/{handle}/status/{id}`` URL.
+
+    If the handle does not match the Twitter format, or the id is not
+    all digits, fall back to ``https://x.com/i/status/{id}``. X resolves
+    that form server-side. If the id is missing or non-numeric, return
+    ``""`` so the caller can drop the link instead of showing something
+    broken.
+    """
+
+    safe_id = tweet_id if _TWEET_ID_RE.match(tweet_id or "") else ""
+    if not safe_id:
+        # No numeric id, no real link.
+        return ""
+    if handle and _HANDLE_RE.match(handle):
+        return f"https://x.com/{handle}/status/{safe_id}"
+    return f"https://x.com/i/status/{safe_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +237,17 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     ]
 
     walker_relevance = max(0.0, min(1.0, float(hit.walker_relevance)))
+    # Server-built x.com URL. ``handle`` is already sanitized, and
+    # ``_build_status_url`` checks both the handle format and the
+    # numeric id before plugging them in. The result is plain ASCII,
+    # so we don't fence it like the user-supplied URLs above.
+    tweet_url = _build_status_url(handle, hit.tweet_id)
 
     return {
         "tweet_id": hit.tweet_id,
         "year_month": _resolve_year_month(index, hit.tweet_id),
         "handle": handle,
+        "tweet_url": tweet_url,
         "snippet": snippet,
         "urls": fenced_urls,
         "score": hit.score,
@@ -339,10 +366,12 @@ def search_likes(
 
     Returns:
         List of dicts shaped
-        ``{"tweet_id", "year_month", "handle", "snippet", "urls",
-        "score", "walker_relevance", "why", "feature_breakdown"}``.
-        ``urls`` is a list of fenced HTTP(S) URLs from the tweet
-        entities; each entry is wrapped in
+        ``{"tweet_id", "year_month", "handle", "tweet_url", "snippet",
+        "urls", "score", "walker_relevance", "why",
+        "feature_breakdown"}``. ``tweet_url`` is the canonical x.com
+        link for the hit, server-built from the sanitized handle and
+        numeric id (no fencing needed). ``urls`` is a list of fenced
+        HTTP(S) URLs from the tweet entities; each entry is wrapped in
         ``<<<URL>>> ... <<<END_URL>>>`` so a caller's LLM can be
         instructed to treat fenced content as data, not instructions.
     """

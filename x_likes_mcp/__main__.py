@@ -193,6 +193,9 @@ def _print_search_results(
         snippet = _expand_snippet(hit["snippet"].replace("\n", " "), urls)
 
         print(_format_meta_line(i, hit, color=color))
+        tweet_url = hit.get("tweet_url") or ""
+        if tweet_url:
+            print(f"    {tweet_url}")
         print(f"    {snippet}")
         for path in _local_media_files(hit["tweet_id"], media_dir):
             print(f"    media: file://{path}")
