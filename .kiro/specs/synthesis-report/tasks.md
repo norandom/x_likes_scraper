@@ -84,7 +84,7 @@
   - _Boundary: mindmap_
 
 - [ ] 3. LLM modules: DSPy signatures, asserts, and compiled-program persistence
-- [ ] 3.1 Define the DSPy signatures, ChainOfThought modules, and claim-source assert
+- [x] 3.1 Define the DSPy signatures, ChainOfThought modules, and claim-source assert
   - Declare typed signatures for `SynthesizeBrief`, `SynthesizeNarrative`, and `SynthesizeTrend` with Pydantic-typed structured outputs (`Claim`, `Section`, `MonthSummary`) and a `dspy.Predict(ExtractEntities)` for the entity-extraction fallback
   - Carry the three system-prompt rules verbatim in each synthesis signature's docstring so DSPy attaches them to every call
   - Configure the DSPy LM via litellm using the existing `OPENAI_BASE_URL` / `OPENAI_MODEL`, failing fast with a clear error if neither is set
