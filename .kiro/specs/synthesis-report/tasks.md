@@ -68,7 +68,7 @@
   - _Requirements: 5.3, 5.4_
   - _Boundary: kg_
 
-- [ ] 2.4 (P) Implement regex entity extraction with a DSPy-fallback hook
+- [x] 2.4 (P) Implement regex entity extraction with a DSPy-fallback hook
   - Run cheap regex / counter passes for handles, hashtags, URL domains, and recurring noun phrases over the hit text and any fetched URL bodies before any LM call
   - Expose a fallback entry point that the orchestrator can wire to the DSPy `ExtractEntities` predictor; the fallback fires only for hits where the regex pass returned zero entities
   - Tests cover: regex extracts handles / hashtags / domains, regex returns empty for tweets that contain only stopwords, fallback hook is called exactly once per empty-regex hit and not at all for regex-covered hits
