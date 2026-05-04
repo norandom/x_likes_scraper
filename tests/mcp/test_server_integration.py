@@ -46,12 +46,22 @@ from x_likes_mcp.walker import WalkerHit
 
 
 def test_build_tool_definitions_lists_exactly_four_named_tools() -> None:
-    """The server registers exactly the four documented tool names."""
+    """The server registers exactly the documented tool names.
+
+    Updated for task 5.3: ``synthesize_likes`` joins the original four
+    tools as the synthesis-report MCP boundary (Req 10.1).
+    """
 
     tools = server_module._build_tool_definitions()
     names = [t.name for t in tools]
 
-    assert names == ["search_likes", "list_months", "get_month", "read_tweet"]
+    assert names == [
+        "search_likes",
+        "list_months",
+        "get_month",
+        "read_tweet",
+        "synthesize_likes",
+    ]
 
 
 def test_build_tool_definitions_each_tool_has_non_empty_input_schema() -> None:
@@ -393,3 +403,200 @@ def test_dispatch_unknown_tool_name_raises_invalid_input(
 
     assert excinfo.value.category == "invalid_input"
     assert "no_such_tool" in excinfo.value.message
+
+
+# ---------------------------------------------------------------------------
+# synthesize_likes registration (task 5.3 / Req 10.1)
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_likes_in_tool_list() -> None:
+    """The server advertises ``synthesize_likes`` in its tool list (Req 10.1)."""
+
+    tools = server_module._build_tool_definitions()
+    names = [t.name for t in tools]
+
+    assert "synthesize_likes" in names
+
+
+def test_synthesize_likes_schema_documents_inputs() -> None:
+    """The ``synthesize_likes`` inputSchema declares ``query`` and
+    ``report_shape`` as required and pins the three valid shapes in the
+    ``enum`` field (Req 10.1).
+    """
+
+    tools = server_module._build_tool_definitions()
+    by_name = {t.name: t for t in tools}
+    synth = by_name["synthesize_likes"]
+    schema = synth.inputSchema
+
+    assert schema["type"] == "object"
+    required = schema.get("required", [])
+    assert "query" in required
+    assert "report_shape" in required
+
+    props = schema["properties"]
+    # report_shape pins the three valid values.
+    shape_prop = props["report_shape"]
+    assert shape_prop["type"] == "string"
+    assert sorted(shape_prop["enum"]) == ["brief", "synthesis", "trend"]
+
+    # The optional inputs are declared with the documented defaults.
+    assert props["fetch_urls"]["type"] == "boolean"
+    assert props["fetch_urls"]["default"] is False
+    assert props["hops"]["type"] == "integer"
+    assert props["hops"]["minimum"] == 1
+    assert props["hops"]["maximum"] == 2
+    assert props["hops"]["default"] == 1
+    assert props["limit"]["type"] == "integer"
+    assert props["limit"]["minimum"] == 1
+    assert props["limit"]["default"] == 50
+
+    # The structured-filter fields mirror search_likes.
+    assert props["year"]["type"] == "integer"
+    assert props["month_start"]["pattern"] == "^(0[1-9]|1[0-2])$"
+    assert props["month_end"]["pattern"] == "^(0[1-9]|1[0-2])$"
+
+
+def test_synthesize_likes_dispatch_reaches_boundary(
+    fake_export: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_dispatch`` for ``synthesize_likes`` reaches
+    :func:`tools.synthesize_likes` with the documented arguments
+    (Req 10.1).
+    """
+
+    captured: dict[str, Any] = {}
+
+    def _stub(
+        index: Any,
+        *,
+        query: str,
+        report_shape: str,
+        fetch_urls: bool = False,
+        hops: int = 1,
+        year: int | None = None,
+        month_start: str | None = None,
+        month_end: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        captured["index"] = index
+        captured["query"] = query
+        captured["report_shape"] = report_shape
+        captured["fetch_urls"] = fetch_urls
+        captured["hops"] = hops
+        captured["year"] = year
+        captured["month_start"] = month_start
+        captured["month_end"] = month_end
+        captured["limit"] = limit
+        return {
+            "markdown": "# stub report\n",
+            "shape": report_shape,
+            "used_hops": hops,
+            "fetched_url_count": 0,
+        }
+
+    monkeypatch.setattr(tools_module, "synthesize_likes", _stub)
+
+    index = _build_index(fake_export)
+    server_module.build_server(index)
+
+    payload = server_module._dispatch(
+        index,
+        "synthesize_likes",
+        {"query": "test", "report_shape": "brief"},
+    )
+
+    # The boundary stub was reached with the documented arguments.
+    assert captured["query"] == "test"
+    assert captured["report_shape"] == "brief"
+    # MCP defaults: fetch_urls=False, hops=1, limit=50.
+    assert captured["fetch_urls"] is False
+    assert captured["hops"] == 1
+    assert captured["limit"] == 50
+
+    # The dispatcher returned the documented success envelope verbatim.
+    assert payload == {
+        "markdown": "# stub report\n",
+        "shape": "brief",
+        "used_hops": 1,
+        "fetched_url_count": 0,
+    }
+
+
+def test_synthesize_likes_invalid_shape_returns_invalid_input_envelope(
+    fake_export: Config,
+) -> None:
+    """An invalid ``report_shape`` surfaces as an MCP error response
+    through the SDK ``call_tool`` wrapper (Req 10.4).
+
+    The MCP SDK first runs JSON-schema validation against the declared
+    ``inputSchema``. Because the schema pins ``report_shape`` to an
+    ``enum`` of ``brief | synthesis | trend``, the SDK rejects an
+    invalid shape at the schema layer and returns a :class:`CallToolResult`
+    with ``isError=True``. That is the same ``invalid_input`` semantics
+    the boundary's :class:`ToolError` would produce; only the envelope
+    encoding differs (text-content message vs structured ``error``).
+    Either way, the dispatcher never runs an LM call (Req 10.4).
+    """
+
+    import asyncio
+
+    import mcp.types as mcp_types
+
+    index = _build_index(fake_export)
+    server = server_module.build_server(index)
+
+    handler = server.request_handlers[mcp_types.CallToolRequest]
+
+    request = mcp_types.CallToolRequest(
+        method="tools/call",
+        params=mcp_types.CallToolRequestParams(
+            name="synthesize_likes",
+            arguments={"query": "test", "report_shape": "bogus"},
+        ),
+    )
+
+    server_result = asyncio.run(handler(request))
+    inner = server_result.root
+
+    assert isinstance(inner, mcp_types.CallToolResult)
+    assert inner.isError is True
+    # The envelope either carries our structured error (when our
+    # boundary fired) or the SDK's schema-validation message (when the
+    # SDK rejected first). Both are the documented invalid_input
+    # response contract.
+    if inner.structuredContent is not None:
+        assert inner.structuredContent["error"]["category"] == "invalid_input"
+        assert "report_shape" in inner.structuredContent["error"]["message"]
+    else:
+        # SDK schema-layer rejection: the user-visible text mentions
+        # the offending value and the allowed enum.
+        assert inner.content
+        text = inner.content[0].text  # type: ignore[union-attr]
+        assert "bogus" in text
+        assert "brief" in text and "synthesis" in text and "trend" in text
+
+
+def test_synthesize_likes_invalid_shape_via_dispatch_raises_invalid_input(
+    fake_export: Config,
+) -> None:
+    """The same invalid-shape path observed directly through ``_dispatch``.
+
+    The ``ToolError`` propagates uncaught so the SDK wrapper can shape
+    the structured error response. Asserting on the raised error here
+    pins the boundary contract before the SDK translation layer.
+    """
+
+    index = _build_index(fake_export)
+    server_module.build_server(index)
+
+    with pytest.raises(ToolError) as excinfo:
+        server_module._dispatch(
+            index,
+            "synthesize_likes",
+            {"query": "test", "report_shape": "bogus"},
+        )
+
+    assert excinfo.value.category == "invalid_input"
+    assert "report_shape" in excinfo.value.message

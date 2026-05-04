@@ -1,4 +1,4 @@
-"""MCP server wiring: build the SDK :class:`Server`, register the four
+"""MCP server wiring: build the SDK :class:`Server`, register the five
 tools with their JSON schemas, and run the stdio transport loop.
 
 Boundary: imports the ``mcp`` SDK, the tool handlers from :mod:`tools`,
@@ -239,8 +239,107 @@ def _read_tweet_tool() -> mcp_types.Tool:
     )
 
 
+def _synthesize_likes_tool(year_max: int) -> mcp_types.Tool:
+    """Tool definition for ``synthesize_likes``.
+
+    Mirrors the ``search_likes`` filter shape (``year`` /
+    ``month_start`` / ``month_end``) and adds the synthesis-report
+    inputs (``report_shape``, ``fetch_urls``, ``hops``, ``limit``).
+    Defaults pin the safe path: ``fetch_urls=False`` (Req 4.7 / 10.3)
+    and ``hops=1`` (Req 2.4) so a typical call performs zero outbound
+    HTTP beyond the LM endpoint.
+    """
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Natural-language synthesis query.",
+            },
+            "report_shape": {
+                "type": "string",
+                "enum": ["brief", "synthesis", "trend"],
+                "description": (
+                    "One of ``brief`` (~300-word concept brief), "
+                    "``synthesis`` (long-form narrative with mindmap), "
+                    "or ``trend`` (month-bucketed timeline)."
+                ),
+            },
+            "fetch_urls": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "When true, the orchestrator probes the crawl4ai "
+                    "container and fetches resolved URLs. Default "
+                    "false so a typical call performs zero outbound "
+                    "HTTP beyond the LM endpoint (Req 4.7 / 10.3)."
+                ),
+            },
+            "hops": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2,
+                "default": 1,
+                "description": (
+                    "1 (default) issues a single search; 2 enables "
+                    "the round-2 entity fan-out (Req 2.4)."
+                ),
+            },
+            "year": {
+                "type": "integer",
+                "minimum": 2006,
+                "maximum": year_max,
+                "description": "Optional year filter (X launched in 2006).",
+            },
+            "month_start": {
+                "type": "string",
+                "pattern": "^(0[1-9]|1[0-2])$",
+                "description": "Optional zero-padded month (01..12). Requires year.",
+            },
+            "month_end": {
+                "type": "string",
+                "pattern": "^(0[1-9]|1[0-2])$",
+                "description": "Optional zero-padded month (01..12). Requires month_start.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 50,
+                "description": "Per-round search limit; defaults to 50.",
+            },
+        },
+        "required": ["query", "report_shape"],
+        "additionalProperties": False,
+    }
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "markdown": {"type": "string"},
+            "shape": {"type": "string", "enum": ["brief", "synthesis", "trend"]},
+            "used_hops": {"type": "integer"},
+            "fetched_url_count": {"type": "integer"},
+        },
+        "required": ["markdown", "shape", "used_hops", "fetched_url_count"],
+        "additionalProperties": False,
+    }
+    return mcp_types.Tool(
+        name="synthesize_likes",
+        description=(
+            "Synthesize a markdown report from the user's liked tweets. "
+            "Drives the synthesis-report orchestrator: round-1 search, "
+            "optional round-2 entity fan-out (hops=2), optional URL "
+            "fetch (fetch_urls=true), KG build, fenced-context "
+            "assembly, DSPy synthesis, markdown render. The default "
+            "path performs zero outbound HTTP beyond the LM endpoint."
+        ),
+        inputSchema=input_schema,
+        outputSchema=output_schema,
+    )
+
+
 def _build_tool_definitions() -> list[mcp_types.Tool]:
-    """Return the four tool definitions with input/output JSON schemas.
+    """Return the five tool definitions with input/output JSON schemas.
 
     The ``year`` upper bound is the current year at server-startup time
     (Requirement 6.8). The patterns match the spec exactly.
@@ -251,6 +350,7 @@ def _build_tool_definitions() -> list[mcp_types.Tool]:
         _list_months_tool(),
         _get_month_tool(),
         _read_tweet_tool(),
+        _synthesize_likes_tool(year_max),
     ]
 
 
@@ -315,6 +415,19 @@ def _dispatch(index: TweetIndex, name: str, arguments: dict[str, Any]) -> dict[s
     if name == "read_tweet":
         return tools.read_tweet(index, arguments.get("tweet_id", ""))
 
+    if name == "synthesize_likes":
+        return tools.synthesize_likes(
+            index,
+            query=arguments.get("query", ""),
+            report_shape=arguments.get("report_shape", ""),
+            fetch_urls=arguments.get("fetch_urls", False),
+            hops=arguments.get("hops", 1),
+            year=arguments.get("year"),
+            month_start=arguments.get("month_start"),
+            month_end=arguments.get("month_end"),
+            limit=arguments.get("limit", 50),
+        )
+
     # Unknown tool name. Should be filtered by the SDK at the schema layer,
     # but defend anyway.
     raise ToolError("invalid_input", f"unknown tool: {name}")
@@ -325,7 +438,7 @@ def _dispatch(index: TweetIndex, name: str, arguments: dict[str, Any]) -> dict[s
 
 
 def build_server(index: TweetIndex) -> Server:
-    """Construct the MCP :class:`Server`, register the four tools, and
+    """Construct the MCP :class:`Server`, register the five tools, and
     return the server instance.
 
     Tools:
@@ -333,6 +446,8 @@ def build_server(index: TweetIndex) -> Server:
         - ``list_months``: enumerate per-month markdown files.
         - ``get_month``: read a single month's markdown.
         - ``read_tweet``: read one tweet's metadata by id.
+        - ``synthesize_likes``: synthesize a markdown report from liked
+          tweets (synthesis-report orchestrator).
     """
     server: Server = Server(name="x-likes-mcp", version=__version__)
     tool_defs = _build_tool_definitions()

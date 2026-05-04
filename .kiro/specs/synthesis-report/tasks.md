@@ -164,7 +164,7 @@
   - _Boundary: tools.synthesize_likes_
   - _Depends: 5.1_
 
-- [ ] 5.3 Register the new tool with the MCP server
+- [x] 5.3 Register the new tool with the MCP server
   - Add the input schema for `synthesize_likes` to the existing tool-definitions builder and route the dispatch path so a call with the tool name reaches the new tool entry
   - Tests cover: the running server advertises `synthesize_likes` in its tool list, dispatching a `call_tool` for `synthesize_likes` reaches the boundary function, dispatching with an invalid shape returns the `invalid_input` envelope produced by the boundary
   - _Requirements: 10.1_
