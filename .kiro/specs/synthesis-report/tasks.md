@@ -59,7 +59,7 @@
   - _Requirements: 11.1, 11.2, 11.3, 11.4_
   - _Boundary: url_cache_
 
-- [ ] 2.3 (P) Build the in-memory mini knowledge graph
+- [x] 2.3 (P) Build the in-memory mini knowledge graph
   - Provide node and edge types covering at least query, tweet, handle, hashtag, domain, and concept nodes and the authored_by, cites, mentions, and recall_for edges
   - Namespace IDs (`tweet:<id>`, `handle:<screen_name>`, `hashtag:<tag>`, `domain:<host>`, `concept:<lower-snake-case>`) so cross-source collisions are impossible
   - Expose `top_entities(kind, n)` and a neighbor lookup so the multihop fan-out and the mindmap can both read the same structure
