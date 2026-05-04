@@ -93,7 +93,7 @@
   - _Requirements: 5.2, 6.1, 6.2, 6.6, 7.3_
   - _Boundary: dspy_modules_
 
-- [ ] 3.2 Implement compiled-program load / save and the optimizer entry point
+- [x] 3.2 Implement compiled-program load / save and the optimizer entry point
   - Resolve the per-shape compiled-program path under the configured directory (default `output/synthesis_compiled/{shape}.json`) and return `None` from the loader when the file is missing or stale so the orchestrator can fall back to the un-optimized signature
   - Save compiled programs atomically (temp file + replace) and create the parent directory on first write
   - Provide a `run_optimizer(shape, labeled_examples, optimizer="BootstrapFewShot")` entry point that sanitizes and fences each demo's input fields before the optimizer sees them, then writes the compiled program to the configured path

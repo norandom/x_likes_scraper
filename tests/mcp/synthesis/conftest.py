@@ -182,11 +182,15 @@ def _stub_dspy_lm(request: pytest.FixtureRequest) -> Iterator[FakeDspyLM]:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register the ``--run-real-lm`` opt-in flag.
+    """Register the ``--run-real-lm`` and ``--run-slow`` opt-in flags.
 
-    Without this flag, any test carrying ``@pytest.mark.real_lm`` is
-    skipped at collection time so the suite never accidentally hits a
-    live LM endpoint.
+    Without ``--run-real-lm``, any test carrying ``@pytest.mark.real_lm``
+    is skipped at collection time so the suite never accidentally hits a
+    live LM endpoint. Without ``--run-slow``, any test carrying
+    ``@pytest.mark.slow`` is skipped — these are the optimizer
+    end-to-end tests that exercise ``BootstrapFewShot`` against the
+    fake LM and are slow / flaky enough to keep out of the default
+    suite (Req 6.4).
     """
 
     parser.addoption(
@@ -198,10 +202,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "real LM endpoint. Default: skip them."
         ),
     )
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help=(
+            "Collect tests marked @pytest.mark.slow (e.g. DSPy optimizer "
+            "end-to-end runs). Default: skip them."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register the ``real_lm`` and ``dspy_canned`` markers.
+    """Register the ``real_lm``, ``dspy_canned``, and ``slow`` markers.
 
     Registering the markers up front keeps unknown-marker warnings out
     of the pytest output for the synthesis package.
@@ -215,20 +228,31 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "dspy_canned(canned): seed FakeDspyLM with the given canned-responses dict.",
     )
+    config.addinivalue_line(
+        "markers",
+        "slow: opt-in marker for slow tests (e.g. DSPy optimizer end-to-end); "
+        "only runs when --run-slow is passed.",
+    )
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Skip ``real_lm``-marked tests unless ``--run-real-lm`` is passed."""
+    """Skip opt-in markers unless their flags are passed."""
 
-    if config.getoption("--run-real-lm"):
-        return
+    if not config.getoption("--run-real-lm"):
+        skip_real_lm = pytest.mark.skip(
+            reason="needs --run-real-lm to opt in to a real LM endpoint",
+        )
+        for item in items:
+            if "real_lm" in item.keywords:
+                item.add_marker(skip_real_lm)
 
-    skip_real_lm = pytest.mark.skip(
-        reason="needs --run-real-lm to opt in to a real LM endpoint",
-    )
-    for item in items:
-        if "real_lm" in item.keywords:
-            item.add_marker(skip_real_lm)
+    if not config.getoption("--run-slow"):
+        skip_slow = pytest.mark.skip(
+            reason="needs --run-slow to opt in to slow tests",
+        )
+        for item in items:
+            if "slow" in item.keywords:
+                item.add_marker(skip_slow)
