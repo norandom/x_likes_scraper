@@ -131,7 +131,7 @@
   - _Boundary: multihop_
   - _Depends: 2.3_
 
-- [ ] 4.4 Implement the markdown report renderer for all three shapes
+- [x] 4.4 Implement the markdown report renderer for all three shapes
   - Render `brief` to a ~300-word concept brief with top entities and 5–10 anchor tweets; render `synthesis` to a longer narrative with a mermaid mindmap and per-cluster tweet list; render `trend` to a month-bucketed timeline (using each tweet's `created_at`) plus a mindmap with temporal weighting
   - Render every anchor tweet as a clickable link to its canonical `https://x.com/{handle}/status/{id}` URL via the existing status-URL helper
   - Group `trend` anchor tweets into chronologically-ordered month buckets derived from `created_at`
