@@ -197,7 +197,7 @@
   - _Boundary: __main__ end-to-end_
   - _Depends: 5.4_
 
-- [ ] 6.3 End-to-end MCP tool test
+- [x] 6.3 End-to-end MCP tool test
   - Call `synthesize_likes` through the MCP dispatcher with a valid shape and assert the response shape pins `{markdown, shape, used_hops, fetched_url_count}` and the markdown passes through sanitize
   - Call with an invalid shape and assert the dispatcher returns the `invalid_input` envelope without invoking the orchestrator
   - Call with `fetch_urls` omitted and assert the orchestrator runs with fetching disabled even if the crawl4ai endpoint is configured
