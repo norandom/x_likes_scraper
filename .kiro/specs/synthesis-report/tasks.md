@@ -121,7 +121,7 @@
   - _Boundary: fetcher_
   - _Depends: 2.1, 2.2_
 
-- [ ] 4.3 Implement the multihop fan-out
+- [x] 4.3 Implement the multihop fan-out
   - Run the round-1 search via the existing index search and return the round-1 hits unchanged when `hops==1`
   - When `hops==2`, mine the top-K entities from the round-1 KG (default K=5, override `SYNTHESIS_ROUND_TWO_K`), issue one search per entity in parallel through a thread pool capped at four workers, and apply the same `year` / `month_start` / `month_end` filters supplied to round-1
   - Fuse round-1 and round-2 hits by `tweet_id` so a tweet that appears in both rounds is rendered once, preserving round-1 ordering for shared IDs and appending round-2-only hits at the end
