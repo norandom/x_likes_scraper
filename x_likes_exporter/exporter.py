@@ -2,21 +2,24 @@
 Main exporter class that orchestrates the export process
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable, List
-from .cookies import CookieManager
-from .client import XAPIClient
-from .downloader import MediaDownloader
-from .formatters import JSONFormatter, PandasFormatter, MarkdownFormatter, HTMLFormatter
-from .models import Tweet
+
 from .checkpoint import Checkpoint
+from .client import XAPIClient
+from .cookies import CookieManager
 from .dates import parse_x_datetime
+from .downloader import MediaDownloader
+from .formatters import HTMLFormatter, JSONFormatter, MarkdownFormatter, PandasFormatter
+from .models import Tweet
 
 
 class XLikesExporter:
     """Main class for exporting X (Twitter) likes"""
 
-    def __init__(self, cookies_file: str, output_dir: str = "output", enable_checkpoints: bool = True):
+    def __init__(
+        self, cookies_file: str, output_dir: str = "output", enable_checkpoints: bool = True
+    ):
         """
         Initialize the exporter
 
@@ -40,16 +43,16 @@ class XLikesExporter:
             raise Exception("Invalid cookies. Please ensure ct0 and auth_token are present.")
 
         # Storage for fetched tweets
-        self.tweets: List[Tweet] = []
+        self.tweets: list[Tweet] = []
 
     def fetch_likes(
         self,
         user_id: str,
         download_media: bool = True,
-        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
-        stop_callback: Optional[Callable[[], bool]] = None,
-        resume: bool = False
-    ) -> List[Tweet]:
+        progress_callback: Callable[[int, int | None], None] | None = None,
+        stop_callback: Callable[[], bool] | None = None,
+        resume: bool = False,
+    ) -> list[Tweet]:
         """
         Fetch all liked tweets
 
@@ -67,11 +70,15 @@ class XLikesExporter:
         start_cursor = None
         if resume and self.checkpoint and self.checkpoint.exists():
             checkpoint_data = self.checkpoint.load()
-            if checkpoint_data and checkpoint_data.get('user_id') == user_id:
-                self.tweets = checkpoint_data.get('tweets', [])
-                start_cursor = checkpoint_data.get('cursor')
+            if checkpoint_data and checkpoint_data.get("user_id") == user_id:
+                self.tweets = checkpoint_data.get("tweets", [])
+                start_cursor = checkpoint_data.get("cursor")
                 print(f"✓ Resuming from checkpoint: {len(self.tweets)} tweets already fetched")
-                print(f"  Starting from cursor: {start_cursor[:20]}..." if start_cursor else "  No cursor found")
+                print(
+                    f"  Starting from cursor: {start_cursor[:20]}..."
+                    if start_cursor
+                    else "  No cursor found"
+                )
             else:
                 print("⚠ Checkpoint found but for different user, starting fresh")
                 if self.checkpoint:
@@ -85,12 +92,13 @@ class XLikesExporter:
             progress_callback=progress_callback,
             stop_callback=stop_callback,
             start_cursor=start_cursor,
-            checkpoint_callback=lambda new_tweets_batch, cursor: self._save_checkpoint(
-                user_id, 
-                self.tweets + new_tweets_batch, 
-                cursor, 
-                download_media
-            ) if self.checkpoint else None
+            checkpoint_callback=lambda new_tweets_batch, cursor: (
+                self._save_checkpoint(
+                    user_id, self.tweets + new_tweets_batch, cursor, download_media
+                )
+                if self.checkpoint
+                else None
+            ),
         )
 
         # Merge with existing tweets if resuming
@@ -112,13 +120,17 @@ class XLikesExporter:
             print(f"\nDownloading media from {len(self.tweets)} tweets...")
             total_media = self.media_downloader.download_all_media(
                 self.tweets,
-                progress_callback=lambda curr, total: print(f"Downloading media: {curr}/{len(self.tweets)} tweets processed", end='\r')
+                progress_callback=lambda curr, total: print(
+                    f"Downloading media: {curr}/{len(self.tweets)} tweets processed", end="\r"
+                ),
             )
             print(f"\nDownloaded {total_media} media files")
 
         return self.tweets
 
-    def _save_checkpoint(self, user_id: str, tweets: List[Tweet], cursor: Optional[str], download_media: bool):
+    def _save_checkpoint(
+        self, user_id: str, tweets: list[Tweet], cursor: str | None, download_media: bool
+    ):
         """Internal method to save checkpoint during fetch"""
         if self.checkpoint:
             self.checkpoint.save(
@@ -126,10 +138,10 @@ class XLikesExporter:
                 tweets=tweets,
                 cursor=cursor,
                 total_fetched=len(tweets),
-                download_media=download_media
+                download_media=download_media,
             )
 
-    def export_json(self, filename: Optional[str] = None, include_raw: bool = False):
+    def export_json(self, filename: str | None = None, include_raw: bool = False):
         """
         Export tweets to JSON
 
@@ -146,7 +158,7 @@ class XLikesExporter:
 
         JSONFormatter.export(self.tweets, str(output_file), include_raw=include_raw)
 
-    def export_csv(self, filename: Optional[str] = None):
+    def export_csv(self, filename: str | None = None):
         """
         Export tweets to CSV using Pandas
 
@@ -160,9 +172,9 @@ class XLikesExporter:
         filename = filename or "likes.csv"
         output_file = self.output_dir / filename
 
-        PandasFormatter.export(self.tweets, str(output_file), format='csv')
+        PandasFormatter.export(self.tweets, str(output_file), format="csv")
 
-    def export_excel(self, filename: Optional[str] = None):
+    def export_excel(self, filename: str | None = None):
         """
         Export tweets to Excel using Pandas
 
@@ -178,11 +190,13 @@ class XLikesExporter:
 
         # Requires openpyxl
         try:
-            PandasFormatter.export(self.tweets, str(output_file), format='excel')
+            PandasFormatter.export(self.tweets, str(output_file), format="excel")
         except ImportError:
             print("Excel export requires openpyxl. Install with: pip install openpyxl")
 
-    def export_markdown(self, filename: Optional[str] = None, include_media: bool = True, split_by_month: bool = True):
+    def export_markdown(
+        self, filename: str | None = None, include_media: bool = True, split_by_month: bool = True
+    ):
         """
         Export tweets to Markdown with embedded media
 
@@ -234,7 +248,7 @@ class XLikesExporter:
             output_file = self.output_dir / filename
             formatter.export(self.tweets, str(output_file), include_media=include_media)
 
-    def export_html(self, filename: Optional[str] = None):
+    def export_html(self, filename: str | None = None):
         """
         Export tweets to HTML
 

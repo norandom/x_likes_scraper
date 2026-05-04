@@ -1,0 +1,66 @@
+# Pre-commit hooks for x-likes-exporter.
+#
+# Install once per checkout:
+#     uv run pre-commit install
+#
+# Run on demand:
+#     uv run pre-commit run --all-files
+#
+# Hook scope is intentionally tight: ruff (lint + format) and mypy
+# (typed scope = ``x_likes_mcp/`` only). Generic hygiene hooks at the
+# bottom catch trailing whitespace, missing newlines, and accidentally
+# committed large or malformed files.
+
+default_language_version:
+  python: python3.12
+
+# Skip directories outside the project's own source: ``.kiro/`` is the
+# spec-driven-dev workspace, ``.claude/`` is per-user skill state,
+# ``output/`` and the ``static_analysis_*`` dirs are scan / build
+# artefacts. Touching any of them from pre-commit produces noisy
+# unrelated diffs.
+exclude: |
+  (?x)^(
+      \.kiro/.*
+    | \.claude/.*
+    | output/.*
+    | static_analysis_codeql_.*/.*
+    | static_analysis_semgrep_.*/.*
+    | examples/.*
+  )$
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Local mypy hook: runs the project's own mypy via uv so it uses the
+  # exact dependency set already resolved in ``uv.lock``. This avoids the
+  # ``mirrors-mypy`` pattern's duplicate-install problem (mcp + pydantic
+  # dependency conflicts when resolved by stock pip in an isolated venv).
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run --no-sync mypy
+        language: system
+        types: [python]
+        files: ^x_likes_mcp/
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]

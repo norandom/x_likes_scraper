@@ -20,7 +20,7 @@ import math
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from x_likes_exporter.dates import parse_x_datetime
@@ -50,9 +50,7 @@ def compute_author_affinity(tweets: list[Tweet]) -> dict[str, float]:
     handles are excluded so anonymized historical tweets do not
     accumulate into a single bucket.
     """
-    counts: Counter[str] = Counter(
-        t.user.screen_name for t in tweets if t.user.screen_name
-    )
+    counts: Counter[str] = Counter(t.user.screen_name for t in tweets if t.user.screen_name)
     return {handle: math.log1p(count) for handle, count in counts.items()}
 
 
@@ -91,7 +89,7 @@ def rank(
     descending, then ``tweet_id`` ascending, for determinism.
     """
     if anchor is None:
-        anchor = datetime.now(timezone.utc)
+        anchor = datetime.now(UTC)
 
     scored: list[ScoredHit] = []
     recency_logged = False
@@ -109,9 +107,7 @@ def rank(
 
         try:
             recency = (
-                recency_decay(
-                    tweet.created_at, anchor, weights.recency_halflife_days
-                )
+                recency_decay(tweet.created_at, anchor, weights.recency_halflife_days)
                 * weights.recency
             )
         except ValueError:

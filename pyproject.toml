@@ -39,6 +39,11 @@ x-likes-mcp = "x_likes_mcp.__main__:main"
 dev = [
     "pytest>=8.0",
     "responses>=0.25",
+    "ruff>=0.7",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+    "types-requests>=2.31",
+    "types-tqdm>=4.66",
 ]
 
 [build-system]
@@ -47,3 +52,88 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["x_likes_exporter", "x_likes_mcp"]
+
+
+# ---------------------------------------------------------------------------
+# Ruff: lint + format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    ".kiro",
+    ".claude",
+    "examples",
+    "output",
+    "static_analysis_codeql_*",
+    "static_analysis_semgrep_*",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import order)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "RUF", # ruff-specific
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "PIE", # flake8-pie
+]
+ignore = [
+    "E501",   # line-too-long: handled by formatter / docstrings can exceed
+    "B008",   # default arg call (e.g. typer / click defaults)
+    "SIM108", # ternary-vs-if: keep if/else when readability wins
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately use long fixtures, magic numbers, broad mocks.
+"tests/**/*.py" = ["B011", "B017", "F841", "RUF012"]
+# CLI / scripts may keep print statements and shorter param checks.
+"cli.py" = ["B008"]
+"download_media.py" = ["B008"]
+"split_md_by_month.py" = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["x_likes_exporter", "x_likes_mcp"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = false
+
+
+# ---------------------------------------------------------------------------
+# mypy: gradual typing, strict scope on the MCP package
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["x_likes_mcp"]
+exclude = [
+    "tests/",
+    "examples/",
+    "output/",
+    "static_analysis_codeql_.*/",
+    "static_analysis_semgrep_.*/",
+]
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+
+# Third-party libs without bundled stubs.
+[[tool.mypy.overrides]]
+module = [
+    "rank_bm25",
+    "rank_bm25.*",
+    "openai",
+    "openai.*",
+    "mcp",
+    "mcp.*",
+    "x_likes_exporter",
+    "x_likes_exporter.*",
+]
+ignore_missing_imports = true

@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from x_likes_mcp import index as index_module
 from x_likes_mcp import ranker as ranker_module
 from x_likes_mcp import tree as tree_module
 from x_likes_mcp.bm25 import BM25Index
@@ -33,7 +32,6 @@ from x_likes_mcp.index import IndexError as MCPIndexError
 from x_likes_mcp.index import MonthInfo, TweetIndex
 from x_likes_mcp.ranker import ScoredHit
 from x_likes_mcp.walker import WalkerHit
-
 
 # ---------------------------------------------------------------------------
 # Embedder seam helpers (task 3.1)
@@ -138,9 +136,7 @@ def test_open_or_build_writes_cache_on_first_call(
         call_counter["n"] += 1
         return real_build(by_month_dir)
 
-    monkeypatch.setattr(
-        "x_likes_mcp.index.tree_module.build_tree", counting_build
-    )
+    monkeypatch.setattr("x_likes_mcp.index.tree_module.build_tree", counting_build)
 
     # Cache absent before the first call.
     assert not fake_export.cache_path.exists()
@@ -153,10 +149,9 @@ def test_open_or_build_writes_cache_on_first_call(
     # Second call, no fixture changes → cache hit, no rebuild.
     TweetIndex.open_or_build(fake_export, _default_weights())
 
-    assert call_counter["n"] == 1, (
-        "second open_or_build with a fresh cache should not rebuild "
-        "the tree"
-    )
+    assert (
+        call_counter["n"] == 1
+    ), "second open_or_build with a fresh cache should not rebuild the tree"
 
 
 def test_open_or_build_rebuilds_when_md_newer_than_cache(
@@ -173,9 +168,7 @@ def test_open_or_build_rebuilds_when_md_newer_than_cache(
         call_counter["n"] += 1
         return real_build(by_month_dir)
 
-    monkeypatch.setattr(
-        "x_likes_mcp.index.tree_module.build_tree", counting_build
-    )
+    monkeypatch.setattr("x_likes_mcp.index.tree_module.build_tree", counting_build)
 
     # First build populates the cache.
     TweetIndex.open_or_build(fake_export, _default_weights())
@@ -191,10 +184,9 @@ def test_open_or_build_rebuilds_when_md_newer_than_cache(
 
     # Second open_or_build sees a stale cache and rebuilds.
     TweetIndex.open_or_build(fake_export, _default_weights())
-    assert call_counter["n"] == 2, (
-        "open_or_build should rebuild when an .md file is newer than "
-        "the cache"
-    )
+    assert (
+        call_counter["n"] == 2
+    ), "open_or_build should rebuild when an .md file is newer than the cache"
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +636,7 @@ def test_search_dense_down_falls_back_to_bm25(
 
     idx = TweetIndex.open_or_build(fake_export, _default_weights())
 
-    def boom(self, query):  # noqa: ARG001
+    def boom(self, query):
         raise EmbeddingError("simulated dense failure")
 
     monkeypatch.setattr(Embedder, "embed_query", boom)
@@ -655,9 +647,7 @@ def test_search_dense_down_falls_back_to_bm25(
     # BM25 ran fine; the call must succeed.
     assert isinstance(results, list)
     # A warning naming the dense failure was emitted.
-    assert any(
-        "dense retrieval failed" in record.message for record in caplog.records
-    )
+    assert any("dense retrieval failed" in record.message for record in caplog.records)
 
 
 def test_search_bm25_down_falls_back_to_dense(
@@ -674,7 +664,7 @@ def test_search_bm25_down_falls_back_to_dense(
 
     idx = TweetIndex.open_or_build(fake_export, _default_weights())
 
-    def boom(self, query, k=200, restrict_to_ids=None):  # noqa: ARG001
+    def boom(self, query, k=200, restrict_to_ids=None):
         raise RuntimeError("simulated bm25 failure")
 
     monkeypatch.setattr(BM25Index, "top_k", boom)
@@ -683,9 +673,7 @@ def test_search_bm25_down_falls_back_to_dense(
         results = idx.search("anything")
 
     assert isinstance(results, list)
-    assert any(
-        "bm25 retrieval failed" in record.message for record in caplog.records
-    )
+    assert any("bm25 retrieval failed" in record.message for record in caplog.records)
 
 
 def test_search_both_down_raises_embedding_error(
@@ -700,10 +688,10 @@ def test_search_both_down_raises_embedding_error(
 
     idx = TweetIndex.open_or_build(fake_export, _default_weights())
 
-    def dense_boom(self, query):  # noqa: ARG001
+    def dense_boom(self, query):
         raise EmbeddingError("dense down")
 
-    def bm25_boom(self, query, k=200, restrict_to_ids=None):  # noqa: ARG001
+    def bm25_boom(self, query, k=200, restrict_to_ids=None):
         raise RuntimeError("bm25 down")
 
     monkeypatch.setattr(Embedder, "embed_query", dense_boom)
@@ -731,9 +719,7 @@ def test_search_synthetic_hits_carry_dense_score_as_relevance(
 
     def spy_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None):
         captured["hits"] = list(walker_hits)
-        return real_rank(
-            walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor
-        )
+        return real_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor)
 
     monkeypatch.setattr("x_likes_mcp.ranker.rank", spy_rank)
 
@@ -767,9 +753,7 @@ def test_search_passes_recency_anchor_at_end_of_month_end(
 
     def fake_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None):
         captured["anchor"] = anchor
-        return real_rank(
-            walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor
-        )
+        return real_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor)
 
     monkeypatch.setattr("x_likes_mcp.ranker.rank", fake_rank)
 
@@ -787,7 +771,7 @@ def test_search_passes_recency_anchor_at_end_of_month_end(
     assert anchor.hour == 23
     assert anchor.minute == 59
     assert anchor.tzinfo is not None
-    assert anchor.utcoffset() == timezone.utc.utcoffset(anchor)
+    assert anchor.utcoffset() == UTC.utcoffset(anchor)
 
 
 # ---------------------------------------------------------------------------
@@ -866,10 +850,9 @@ def test_open_or_build_reuses_embedding_cache_on_second_call(
     # Second build with the same config (same output_dir) reuses the cache.
     TweetIndex.open_or_build(fake_export, _default_weights())
 
-    assert counter["calls"] == first_call_count, (
-        "second open_or_build with a valid embedding cache should not "
-        "re-invoke the embeddings API"
-    )
+    assert (
+        counter["calls"] == first_call_count
+    ), "second open_or_build with a valid embedding cache should not re-invoke the embeddings API"
 
 
 def test_open_or_build_writes_cache_files(

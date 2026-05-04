@@ -28,12 +28,13 @@ Design notes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import openai
@@ -76,17 +77,17 @@ _EMPTY_TEXT_PLACEHOLDER: str = "[empty tweet]"
 # DEFAULT_EMBEDDING_MODEL`` (the spec lists it in the embeddings.py
 # constants block).
 __all__ = [
-    "CACHE_SCHEMA_VERSION",
-    "CACHE_NPY_NAME",
     "CACHE_META_NAME",
+    "CACHE_NPY_NAME",
+    "CACHE_SCHEMA_VERSION",
     "DEFAULT_BASE_URL",
-    "DEFAULT_EMBEDDING_MODEL",
-    "DEFAULT_TOP_K",
     "DEFAULT_BATCH_SIZE",
+    "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_MAX_RETRIES",
-    "EmbeddingError",
+    "DEFAULT_TOP_K",
     "CorpusEmbeddings",
     "Embedder",
+    "EmbeddingError",
     "open_or_build_corpus",
 ]
 
@@ -139,11 +140,16 @@ def _l2_normalize(vec: np.ndarray) -> np.ndarray:
     return vec / norm
 
 
-def _extract_embeddings(response: object) -> list[list[float]]:
+def _extract_embeddings(response: Any) -> list[list[float]]:
     """Sort the SDK response data by ``.index`` and return the vectors.
 
     The OpenAI embeddings API does not guarantee response order matches
     request order; sorting by ``index`` restores the alignment.
+
+    Typed ``Any`` because the upstream type is provider-dependent
+    (OpenRouter returns OpenAI-shape, but the openai SDK's
+    ``CreateEmbeddingResponse`` is strict and we accept compatible
+    look-alikes).
     """
 
     sorted_data = sorted(response.data, key=lambda d: d.index)
@@ -235,9 +241,7 @@ class Embedder:
             )
 
         if self._client is None:
-            self._client = openai.OpenAI(
-                api_key=self.api_key, base_url=self.base_url
-            )
+            self._client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         max_attempts = self.max_retries + 1
         last_error: Exception | None = None
@@ -263,7 +267,7 @@ class Embedder:
 
             # Sleep between attempts. Skip the final sleep.
             if attempt < max_attempts - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
 
         raise EmbeddingError(
             f"OpenRouter embeddings request failed after {max_attempts} "
@@ -271,9 +275,7 @@ class Embedder:
             f"{last_error}"
         ) from last_error
 
-    def _classify_call_error(
-        self, exc: Exception, batch_size: int
-    ) -> Exception:
+    def _classify_call_error(self, exc: Exception, batch_size: int) -> Exception:
         """Decide whether ``exc`` from ``embeddings.create`` is retryable.
 
         Raises :class:`EmbeddingError` (terminal) for auth failures, 4xx
@@ -284,8 +286,7 @@ class Embedder:
 
         if isinstance(exc, openai.AuthenticationError):
             raise EmbeddingError(
-                f"OpenRouter authentication failed (check "
-                f"OPENROUTER_API_KEY): {exc}"
+                f"OpenRouter authentication failed (check OPENROUTER_API_KEY): {exc}"
             ) from exc
 
         if isinstance(exc, openai.APIStatusError):
@@ -320,9 +321,7 @@ class Embedder:
         vec = np.asarray(rows[0], dtype=np.float32)
         return _l2_normalize(vec).astype(np.float32, copy=False)
 
-    def embed_corpus(
-        self, ordered_ids: list[str], texts: list[str]
-    ) -> np.ndarray:
+    def embed_corpus(self, ordered_ids: list[str], texts: list[str]) -> np.ndarray:
         """Encode ``texts`` in id order. Returns ``(N, D)`` ``float32``, row-normalized.
 
         Chunks ``texts`` into batches of ``self.batch_size``; calls
@@ -446,9 +445,7 @@ class Embedder:
                 candidate_indices = np.arange(n)
             else:
                 # argpartition gives an unsorted top_count; sort that slice.
-                candidate_indices = np.argpartition(-scores, kth=top_count - 1)[
-                    :top_count
-                ]
+                candidate_indices = np.argpartition(-scores, kth=top_count - 1)[:top_count]
             # Sort the selected indices by score descending.
             sorted_local = np.argsort(-scores[candidate_indices])
             selected = candidate_indices[sorted_local]
@@ -456,11 +453,7 @@ class Embedder:
             # Restricted-scope top-k. Gather the row indices whose id is in
             # the restriction set first; then top-k within that scope.
             restricted_indices = np.array(
-                [
-                    i
-                    for i, tid in enumerate(corpus.ordered_ids)
-                    if tid in restrict_to_ids
-                ],
+                [i for i, tid in enumerate(corpus.ordered_ids) if tid in restrict_to_ids],
                 dtype=np.int64,
             )
             if restricted_indices.size == 0:
@@ -474,15 +467,11 @@ class Embedder:
                 selected = restricted_indices[sorted_local]
             else:
                 top_count = k
-                local_top = np.argpartition(
-                    -restricted_scores, kth=top_count - 1
-                )[:top_count]
+                local_top = np.argpartition(-restricted_scores, kth=top_count - 1)[:top_count]
                 local_sorted = local_top[np.argsort(-restricted_scores[local_top])]
                 selected = restricted_indices[local_sorted]
 
-        return [
-            (corpus.ordered_ids[int(i)], float(scores[int(i)])) for i in selected
-        ]
+        return [(corpus.ordered_ids[int(i)], float(scores[int(i)])) for i in selected]
 
 
 # ---------------------------------------------------------------------------
@@ -585,18 +574,16 @@ def _save_cache(
     except OSError as exc:
         # Clean up any tmp files we managed to create. ``missing_ok=True``
         # skips files that were never written (or were already promoted).
+        # Cleanup is best-effort; we are already in the error path.
         for tmp in (tmp_npy, tmp_meta):
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
-            except OSError:
-                # Cleanup is best-effort; we are already in the error path.
-                pass
         raise EmbeddingError(
             f"Failed to write embedding cache to {cache_npy.parent}: {exc}"
         ) from exc
 
 
-def _read_meta_or_none(cache_meta: Path) -> dict | None:
+def _read_meta_or_none(cache_meta: Path) -> dict[str, Any] | None:
     """Read and JSON-parse the meta sidecar.
 
     Returns the parsed dict, or ``None`` when the file is missing or the
@@ -606,8 +593,9 @@ def _read_meta_or_none(cache_meta: Path) -> dict | None:
     """
 
     try:
-        with open(cache_meta, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+        with open(cache_meta, encoding="utf-8") as fh:
+            data: dict[str, Any] = json.load(fh)
+            return data
     except FileNotFoundError:
         return None
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -656,7 +644,8 @@ def _load_matrix_or_none(cache_npy: Path) -> np.ndarray | None:
     """Load the npy matrix, or ``None`` on missing / corrupt file."""
 
     try:
-        return np.load(cache_npy, allow_pickle=False)
+        matrix: np.ndarray = np.load(cache_npy, allow_pickle=False)
+        return matrix
     except FileNotFoundError:
         return None
     except (ValueError, OSError):
@@ -690,9 +679,7 @@ def _load_cache(
     if meta is None:
         return None
 
-    validated = _validate_meta(
-        meta, expected_model, expected_ids, expected_schema_version
-    )
+    validated = _validate_meta(meta, expected_model, expected_ids, expected_schema_version)
     if validated is None:
         return None
     tweet_ids, embedding_dim = validated
@@ -724,7 +711,7 @@ def _load_cache(
 
 def open_or_build_corpus(
     embedder: Embedder,
-    tweets_by_id: dict[str, "Tweet"],
+    tweets_by_id: dict[str, Tweet],
     cache_dir: Path,
 ) -> CorpusEmbeddings:
     """Load the corpus cache when valid; otherwise rebuild and save.

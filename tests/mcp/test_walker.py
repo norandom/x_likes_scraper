@@ -24,7 +24,6 @@ from x_likes_mcp.config import Config, RankerWeights
 from x_likes_mcp.tree import TreeNode, TweetTree
 from x_likes_mcp.walker import WalkerError, WalkerHit, walk
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 
@@ -87,7 +86,7 @@ def test_walk_returns_hit_for_valid_response(monkeypatch: pytest.MonkeyPatch) ->
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001 - test stub
+    def stub(_client, _model, _messages):
         return '{"hits": [{"id": "1001", "relevance": 0.9, "why": "match"}]}'
 
     _install_stub(monkeypatch, stub)
@@ -103,12 +102,8 @@ def test_walk_parses_markdown_fenced_json(monkeypatch: pytest.MonkeyPatch) -> No
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
-        return (
-            "```json\n"
-            '{"hits": [{"id": "1001", "relevance": 0.5, "why": "fenced"}]}\n'
-            "```"
-        )
+    def stub(_client, _model, _messages):
+        return '```json\n{"hits": [{"id": "1001", "relevance": 0.5, "why": "fenced"}]}\n```'
 
     _install_stub(monkeypatch, stub)
 
@@ -125,7 +120,7 @@ def test_walk_parses_top_level_array(monkeypatch: pytest.MonkeyPatch) -> None:
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         return '[{"id": "1001", "relevance": 0.7, "why": "array"}]'
 
     _install_stub(monkeypatch, stub)
@@ -142,12 +137,12 @@ def test_walk_drops_unknown_ids(monkeypatch: pytest.MonkeyPatch) -> None:
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         return (
             '{"hits": ['
             '{"id": "9999", "relevance": 0.9, "why": "ghost"},'
             '{"id": "1001", "relevance": 0.4, "why": "real"}'
-            ']}'
+            "]}"
         )
 
     _install_stub(monkeypatch, stub)
@@ -165,12 +160,12 @@ def test_walk_drops_relevance_outside_unit_interval(
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001"), _node("2025-01", "1002")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         return (
             '{"hits": ['
             '{"id": "1001", "relevance": 1.5, "why": "too high"},'
             '{"id": "1002", "relevance": -0.1, "why": "negative"}'
-            ']}'
+            "]}"
         )
 
     _install_stub(monkeypatch, stub)
@@ -197,13 +192,13 @@ def test_walk_drops_non_finite_relevance(monkeypatch: pytest.MonkeyPatch) -> Non
     # standard ``json`` module's tolerant parsing — strict JSON forbids them
     # but ``json.loads`` accepts them by default. Use an array literal so
     # the values are clear.
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         return (
             '{"hits": ['
             '{"id": "1001", "relevance": NaN, "why": "nan"},'
             '{"id": "1002", "relevance": Infinity, "why": "inf"},'
             '{"id": "1003", "relevance": -Infinity, "why": "neg inf"}'
-            ']}'
+            "]}"
         )
 
     _install_stub(monkeypatch, stub)
@@ -220,12 +215,10 @@ def test_walk_truncates_why_to_240_chars(monkeypatch: pytest.MonkeyPatch) -> Non
 
     long_why = "x" * 500
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         import json
 
-        return json.dumps(
-            {"hits": [{"id": "1001", "relevance": 0.5, "why": long_why}]}
-        )
+        return json.dumps({"hits": [{"id": "1001", "relevance": 0.5, "why": long_why}]})
 
     _install_stub(monkeypatch, stub)
 
@@ -243,7 +236,7 @@ def test_walk_wraps_runtime_error_in_walker_error(
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         raise RuntimeError("LLM down")
 
     _install_stub(monkeypatch, stub)
@@ -264,7 +257,7 @@ def test_walk_raises_walker_error_for_unsalvageable_json(
 
     tree = _make_tree({"2025-01": [_node("2025-01", "1001")]})
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         return "not json at all"
 
     _install_stub(monkeypatch, stub)
@@ -289,7 +282,7 @@ def test_walk_none_scope_iterates_all_months_ascending(
 
     months_seen: list[str] = []
 
-    def stub(_client, _model, messages):  # noqa: ANN001
+    def stub(_client, _model, messages):
         # The user message lists tweets by id; we extract the ids to record
         # which month was processed in this call. Each chunk in this test has
         # exactly one tweet, so the id maps uniquely to a month.
@@ -321,7 +314,7 @@ def test_walk_unknown_month_in_scope_makes_no_calls(
 
     call_count = 0
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         nonlocal call_count
         call_count += 1
         return '{"hits": []}'
@@ -350,7 +343,7 @@ def test_walk_chunk_size_one_calls_helper_per_node(
 
     call_count = 0
 
-    def stub(_client, _model, _messages):  # noqa: ANN001
+    def stub(_client, _model, _messages):
         nonlocal call_count
         call_count += 1
         return '{"hits": []}'

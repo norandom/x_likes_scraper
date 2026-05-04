@@ -24,7 +24,6 @@ import pytest
 
 from x_likes_exporter.cookies import CookieManager
 
-
 # Capture the unpatched ``_load_cookies`` at import time, before the session
 # autouse fixture in ``conftest.py`` swaps it out. Using ``__dict__`` returns
 # the underlying function object on the class without descriptor binding, which

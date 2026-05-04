@@ -47,7 +47,6 @@ from .errors import ToolError
 from .index import IndexError, TweetIndex
 from .sanitize import safe_http_url, sanitize_text
 
-
 _TCO_RE = re.compile(r"https?://t\.co/\S+")
 _TWEET_ID_RE = re.compile(r"^[0-9]+$")
 
@@ -80,8 +79,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--init",
         action="store_true",
         help=(
-            "Build or load the index, print a summary on stderr, exit. "
-            "Skips the stdio MCP loop."
+            "Build or load the index, print a summary on stderr, exit. Skips the stdio MCP loop."
         ),
     )
     mode.add_argument(

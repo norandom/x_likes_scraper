@@ -3,7 +3,6 @@ Cookie parsing and management for X authentication
 """
 
 import json
-from typing import Dict
 
 
 class CookieManager:
@@ -19,19 +18,19 @@ class CookieManager:
         self.cookies_file = cookies_file
         self.cookies = self._load_cookies()
 
-    def _load_cookies(self) -> Dict[str, str]:
+    def _load_cookies(self) -> dict[str, str]:
         """Load cookies from JSON file and convert to dict format"""
-        with open(self.cookies_file, 'r', encoding='utf-8') as f:
+        with open(self.cookies_file, encoding="utf-8") as f:
             cookies_list = json.load(f)
 
         # Convert list of cookie objects to simple dict
         cookies_dict = {}
         for cookie in cookies_list:
-            cookies_dict[cookie['name']] = cookie['value']
+            cookies_dict[cookie["name"]] = cookie["value"]
 
         return cookies_dict
 
-    def get_cookie_dict(self) -> Dict[str, str]:
+    def get_cookie_dict(self) -> dict[str, str]:
         """Get cookies as a dictionary for requests library"""
         return self.cookies
 
@@ -41,15 +40,15 @@ class CookieManager:
 
     def get_csrf_token(self) -> str:
         """Extract CSRF token (ct0) from cookies"""
-        return self.cookies.get('ct0', '')
+        return self.cookies.get("ct0", "")
 
     def get_auth_token(self) -> str:
         """Extract auth_token from cookies"""
-        return self.cookies.get('auth_token', '')
+        return self.cookies.get("auth_token", "")
 
     def get_guest_id(self) -> str:
         """Extract guest_id from cookies"""
-        return self.cookies.get('guest_id', '')
+        return self.cookies.get("guest_id", "")
 
     def validate(self) -> bool:
         """
@@ -58,5 +57,5 @@ class CookieManager:
         Returns:
             True if all required cookies are present, False otherwise
         """
-        required = ['ct0', 'auth_token']
+        required = ["ct0", "auth_token"]
         return all(cookie in self.cookies for cookie in required)

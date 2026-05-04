@@ -58,9 +58,7 @@ def test_local_media_files_returns_empty_when_no_match(tmp_path: Path) -> None:
         "12 34",
     ],
 )
-def test_local_media_files_rejects_non_numeric_tweet_id(
-    tmp_path: Path, bad_id: str
-) -> None:
+def test_local_media_files_rejects_non_numeric_tweet_id(tmp_path: Path, bad_id: str) -> None:
     """``tweet_id`` must match ``^[0-9]+$`` to reach the glob.
 
     Twitter IDs are numeric; anything else is either programmer error or

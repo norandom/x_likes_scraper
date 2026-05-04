@@ -3,8 +3,9 @@ Authentication and token extraction for X API
 """
 
 import re
+
 import requests
-from typing import Optional, Dict
+
 from .cookies import CookieManager
 
 
@@ -19,8 +20,8 @@ class XAuthenticator:
             cookie_manager: CookieManager instance with loaded cookies
         """
         self.cookie_manager = cookie_manager
-        self._bearer_token: Optional[str] = None
-        self._query_ids: Dict[str, str] = {}
+        self._bearer_token: str | None = None
+        self._query_ids: dict[str, str] = {}
 
     def get_bearer_token(self) -> str:
         """
@@ -40,7 +41,7 @@ class XAuthenticator:
             response = requests.get(
                 "https://x.com/home",
                 cookies=self.cookie_manager.get_cookie_dict(),
-                headers=self._get_headers()
+                headers=self._get_headers(),
             )
             response.raise_for_status()
             html = response.text
@@ -70,7 +71,7 @@ class XAuthenticator:
             return self._bearer_token
 
         except Exception as e:
-            raise Exception(f"Error getting Bearer token: {e}")
+            raise Exception(f"Error getting Bearer token: {e}") from e
 
     def get_query_id(self, operation_name: str) -> str:
         """
@@ -93,7 +94,7 @@ class XAuthenticator:
             response = requests.get(
                 "https://x.com/home",
                 cookies=self.cookie_manager.get_cookie_dict(),
-                headers=self._get_headers()
+                headers=self._get_headers(),
             )
             response.raise_for_status()
             html = response.text
@@ -124,9 +125,9 @@ class XAuthenticator:
             return query_id
 
         except Exception as e:
-            raise Exception(f"Error getting query ID for {operation_name}: {e}")
+            raise Exception(f"Error getting query ID for {operation_name}: {e}") from e
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get common headers for requests"""
         return {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

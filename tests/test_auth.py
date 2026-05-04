@@ -38,7 +38,6 @@ import responses
 from x_likes_exporter.auth import XAuthenticator
 from x_likes_exporter.cookies import CookieManager
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 HOME_PAGE_PATH = FIXTURES_DIR / "home_page.html"
 MAIN_SCRIPT_PATH = FIXTURES_DIR / "main_script.js"

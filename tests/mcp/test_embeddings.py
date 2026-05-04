@@ -27,14 +27,13 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from x_likes_mcp import config as config_module
 from x_likes_mcp import embeddings as emb
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -363,9 +362,7 @@ def test_call_embeddings_api_persistent_transient_raises_embedding_error(
 
     fake_client = MagicMock()
     fake_client.embeddings.create.side_effect = always_fail
-    monkeypatch.setattr(
-        emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True
-    )
+    monkeypatch.setattr(emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True)
 
     embedder = emb.Embedder(api_key="abc", max_retries=3)
     with pytest.raises(emb.EmbeddingError, match=r"(?i)retr"):
@@ -389,9 +386,7 @@ def test_call_embeddings_api_auth_error_propagates_immediately(
 
     fake_client = MagicMock()
     fake_client.embeddings.create.side_effect = auth_fail
-    monkeypatch.setattr(
-        emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True
-    )
+    monkeypatch.setattr(emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True)
 
     embedder = emb.Embedder(api_key="abc", max_retries=3)
     with pytest.raises(emb.EmbeddingError):
@@ -418,9 +413,7 @@ def test_call_embeddings_api_sorts_response_data_by_index(
     ]
     fake_client = MagicMock()
     fake_client.embeddings.create.return_value = response
-    monkeypatch.setattr(
-        emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True
-    )
+    monkeypatch.setattr(emb.openai, "OpenAI", MagicMock(return_value=fake_client), raising=True)
 
     embedder = emb.Embedder(api_key="abc")
     out = embedder._call_embeddings_api(["a", "b", "c"])
@@ -563,9 +556,7 @@ def test_cosine_top_k_with_restrict_returns_only_restricted_ids() -> None:
     corpus = _make_corpus(raw, ids)
     query = _normalize_vec([1.0, 0.0])
 
-    result = embedder.cosine_top_k(
-        query, corpus, k=200, restrict_to_ids={"id_2", "id_8"}
-    )
+    result = embedder.cosine_top_k(query, corpus, k=200, restrict_to_ids={"id_2", "id_8"})
 
     assert len(result) == 2
     returned_ids = {tid for tid, _ in result}
@@ -582,9 +573,7 @@ def test_cosine_top_k_with_restrict_smaller_than_k_returns_all() -> None:
     corpus = _make_corpus(raw, ids)
     query = _normalize_vec([1.0, 0.0])
 
-    result = embedder.cosine_top_k(
-        query, corpus, k=10, restrict_to_ids={"id_3", "id_7"}
-    )
+    result = embedder.cosine_top_k(query, corpus, k=10, restrict_to_ids={"id_3", "id_7"})
 
     # Restricted scope (size 2) is smaller than k (10): return all of it.
     assert len(result) == 2
@@ -607,9 +596,7 @@ def test_cosine_top_k_with_restrict_no_matches_returns_empty() -> None:
     corpus = _make_corpus([[1.0, 0.0], [0.0, 1.0]], ["a", "b"])
     query = _normalize_vec([1.0, 0.0])
 
-    result = embedder.cosine_top_k(
-        query, corpus, k=5, restrict_to_ids={"id_does_not_exist"}
-    )
+    result = embedder.cosine_top_k(query, corpus, k=5, restrict_to_ids={"id_does_not_exist"})
 
     assert result == []
 
@@ -716,9 +703,7 @@ def test_save_cache_writes_npy_and_meta_atomically(tmp_path: Path) -> None:
     assert meta["tweet_ids_in_order"] == ["a", "b", "c"]
 
 
-def test_save_cache_uses_tmp_then_rename(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_save_cache_uses_tmp_then_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     matrix = _sample_matrix(n=2, d=3)
     cache_npy = tmp_path / emb.CACHE_NPY_NAME
     cache_meta = tmp_path / emb.CACHE_META_NAME

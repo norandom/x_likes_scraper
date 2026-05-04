@@ -36,7 +36,6 @@ import pytest
 
 from x_likes_mcp.config import Config, load_config
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -75,9 +74,7 @@ def _block_real_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _block_real_embeddings(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _block_real_embeddings(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Default-stub the OpenRouter embeddings seam for every MCP test.
 
     ``TweetIndex.open_or_build`` (task 3.1 onward) constructs an

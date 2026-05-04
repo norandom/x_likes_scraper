@@ -31,9 +31,7 @@ def test_appends_resolved_urls_after_text() -> None:
         text="check this https://t.co/abc",
         urls=["https://github.com/owner/repo"],
     )
-    assert tweet_index_text(tweet) == (
-        "check this https://t.co/abc https://github.com/owner/repo"
-    )
+    assert tweet_index_text(tweet) == ("check this https://t.co/abc https://github.com/owner/repo")
 
 
 def test_appends_multiple_urls() -> None:
@@ -41,9 +39,7 @@ def test_appends_multiple_urls() -> None:
         text="dual link",
         urls=["https://example.com/a", "https://example.org/b"],
     )
-    assert tweet_index_text(tweet) == (
-        "dual link https://example.com/a https://example.org/b"
-    )
+    assert tweet_index_text(tweet) == ("dual link https://example.com/a https://example.org/b")
 
 
 def test_empty_text_with_urls() -> None:

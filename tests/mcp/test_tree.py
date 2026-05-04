@@ -21,7 +21,6 @@ from pathlib import Path
 from x_likes_mcp import tree
 from x_likes_mcp.tree import TreeNode, TweetTree, build_tree
 
-
 FIXTURES_BY_MONTH = Path(__file__).parent / "fixtures" / "by_month"
 
 
@@ -44,6 +43,7 @@ _EXPECTED_MONTH_BY_ID: dict[str, str] = {
 
 # ---------------------------------------------------------------------------
 # Smoke tests against the on-disk fixtures.
+
 
 def test_build_tree_returns_tweet_tree_with_expected_months() -> None:
     """build_tree's nodes_by_month keys must match the three fixture months."""
@@ -116,6 +116,7 @@ def test_build_tree_is_deterministic() -> None:
 # ---------------------------------------------------------------------------
 # Edge cases driven through tmp_path.
 
+
 def test_build_tree_empty_directory_returns_empty_tree(tmp_path: Path) -> None:
     """A directory with no ``likes_*.md`` files yields an empty TweetTree."""
     # tmp_path is a fresh, empty directory; build_tree should walk it
@@ -176,6 +177,7 @@ def test_build_tree_skips_section_without_view_on_x_link(tmp_path: Path) -> None
 
 # ---------------------------------------------------------------------------
 # Module hygiene: tree.py must not import the OpenAI SDK.
+
 
 def test_tree_module_does_not_import_openai() -> None:
     """``tree.py`` is the pure parser; the LLM lives in ``walker.py``.

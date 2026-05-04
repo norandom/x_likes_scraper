@@ -37,7 +37,6 @@ import responses
 from x_likes_exporter.client import XAPIClient
 from x_likes_exporter.cookies import CookieManager
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 COOKIES_FIXTURE = FIXTURES_DIR / "cookies_valid.json"
 LIKES_SUCCESS_FIXTURE = FIXTURES_DIR / "likes_page_success.json"
@@ -63,7 +62,7 @@ USER_ID = "14252145"
 
 def _load_fixture(path: Path) -> dict:
     """Load a JSON fixture from disk."""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -216,9 +215,7 @@ def _success_body_with_cursor(cursor_value: str) -> dict:
     distinguishable.
     """
     body = _load_fixture(LIKES_SUCCESS_FIXTURE)
-    entries = body["data"]["user"]["result"]["timeline"]["timeline"][
-        "instructions"
-    ][0]["entries"]
+    entries = body["data"]["user"]["result"]["timeline"]["timeline"]["instructions"][0]["entries"]
     for entry in entries:
         content = entry.get("content", {})
         if (
@@ -237,9 +234,7 @@ def _success_body_without_cursor() -> dict:
     pagination terminator.
     """
     body = _load_fixture(LIKES_SUCCESS_FIXTURE)
-    instructions = body["data"]["user"]["result"]["timeline"]["timeline"][
-        "instructions"
-    ][0]
+    instructions = body["data"]["user"]["result"]["timeline"]["timeline"]["instructions"][0]
     instructions["entries"] = [
         entry
         for entry in instructions["entries"]
@@ -292,9 +287,7 @@ def test_fetch_all_likes_pagination(client: XAPIClient, monkeypatch) -> None:
 
 
 @responses.activate
-def test_fetch_all_likes_rate_limit_branch(
-    client: XAPIClient, monkeypatch
-) -> None:
+def test_fetch_all_likes_rate_limit_branch(client: XAPIClient, monkeypatch) -> None:
     """A response with ``x-rate-limit-remaining: 0`` triggers wait + checkpoint.
 
     ``RateLimitInfo.should_wait()`` returns ``True`` when ``remaining <= 1``,
@@ -364,16 +357,14 @@ def test_fetch_all_likes_rate_limit_branch(
     #   before the sleep.
     assert sleep_mock.called, "time.sleep should be invoked when remaining=0"
     sleep_args = [call.args[0] for call in sleep_mock.call_args_list]
-    assert 10 in sleep_args, (
-        f"Expected sleep(10) for rate-limit wait, got {sleep_args}"
-    )
+    assert 10 in sleep_args, f"Expected sleep(10) for rate-limit wait, got {sleep_args}"
 
-    assert checkpoint_callback.called, (
-        "checkpoint_callback should be invoked before the rate-limit sleep"
-    )
+    assert (
+        checkpoint_callback.called
+    ), "checkpoint_callback should be invoked before the rate-limit sleep"
     # The checkpoint call before the sleep should carry the cursor that
     # triggered the wait (i.e. CURSOR_PAGE_1, the Bottom cursor of page 1).
     cursors_passed = [call.args[1] for call in checkpoint_callback.call_args_list]
-    assert "CURSOR_PAGE_1" in cursors_passed, (
-        f"Expected checkpoint with CURSOR_PAGE_1, got {cursors_passed}"
-    )
+    assert (
+        "CURSOR_PAGE_1" in cursors_passed
+    ), f"Expected checkpoint with CURSOR_PAGE_1, got {cursors_passed}"

@@ -40,7 +40,6 @@ from x_likes_mcp.errors import ToolError
 from x_likes_mcp.index import TweetIndex
 from x_likes_mcp.walker import WalkerHit
 
-
 # ---------------------------------------------------------------------------
 # _build_tool_definitions: tool list + schema shape
 # ---------------------------------------------------------------------------
@@ -198,20 +197,14 @@ def test_dispatch_search_likes_with_why_true_integrates(
         captured["calls"] += 1
         captured["query"] = query
         captured["top_ids"] = [hit.tweet_id for hit in top_results]
-        return {
-            "1001": WalkerHit(
-                tweet_id="1001", relevance=0.87, why="explainer rationale"
-            )
-        }
+        return {"1001": WalkerHit(tweet_id="1001", relevance=0.87, why="explainer rationale")}
 
     monkeypatch.setattr(tools_module, "_call_walker_explainer", fake_explainer)
 
     index = _build_index(fake_export)
     server_module.build_server(index)
 
-    payload = server_module._dispatch(
-        index, "search_likes", {"query": "test", "with_why": True}
-    )
+    payload = server_module._dispatch(index, "search_likes", {"query": "test", "with_why": True})
 
     assert captured["calls"] == 1
     assert captured["query"] == "test"
@@ -291,9 +284,7 @@ def test_dispatch_search_likes_blank_query_translates_via_call_tool_wrapper(
 
     request = mcp_types.CallToolRequest(
         method="tools/call",
-        params=mcp_types.CallToolRequestParams(
-            name="search_likes", arguments={"query": "   "}
-        ),
+        params=mcp_types.CallToolRequestParams(name="search_likes", arguments={"query": "   "}),
     )
 
     # The SDK wraps results in ServerResult; unwrap to inspect.
@@ -327,12 +318,8 @@ def test_dispatch_search_likes_both_retrievals_down_becomes_upstream_failure(
     def bm25_boom(self, query, k=200, restrict_to_ids=None):
         raise RuntimeError("bm25 down")
 
-    monkeypatch.setattr(
-        "x_likes_mcp.embeddings.Embedder.embed_query", dense_boom
-    )
-    monkeypatch.setattr(
-        "x_likes_mcp.bm25.BM25Index.top_k", bm25_boom
-    )
+    monkeypatch.setattr("x_likes_mcp.embeddings.Embedder.embed_query", dense_boom)
+    monkeypatch.setattr("x_likes_mcp.bm25.BM25Index.top_k", bm25_boom)
 
     index = _build_index(fake_export)
     server_module.build_server(index)
@@ -358,12 +345,8 @@ def test_dispatch_list_months_succeeds_after_search_failure(
     def bm25_boom(self, query, k=200, restrict_to_ids=None):
         raise RuntimeError("bm25 down")
 
-    monkeypatch.setattr(
-        "x_likes_mcp.embeddings.Embedder.embed_query", dense_boom
-    )
-    monkeypatch.setattr(
-        "x_likes_mcp.bm25.BM25Index.top_k", bm25_boom
-    )
+    monkeypatch.setattr("x_likes_mcp.embeddings.Embedder.embed_query", dense_boom)
+    monkeypatch.setattr("x_likes_mcp.bm25.BM25Index.top_k", bm25_boom)
 
     index = _build_index(fake_export)
     server_module.build_server(index)

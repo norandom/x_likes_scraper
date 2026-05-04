@@ -14,7 +14,7 @@ hand-typed strings.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,7 +27,6 @@ from x_likes_mcp.ranker import (
     recency_decay,
 )
 from x_likes_mcp.walker import WalkerHit
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,9 +69,7 @@ def _tweet(
     """Construct a :class:`Tweet` with documented engagement defaults."""
 
     if created_at is None:
-        created_at = _fmt_x_datetime(
-            datetime(2025, 1, 15, 9, 30, 0, tzinfo=timezone.utc)
-        )
+        created_at = _fmt_x_datetime(datetime(2025, 1, 15, 9, 30, 0, tzinfo=UTC))
     return Tweet(
         id=tweet_id,
         text=f"hello from @{handle}",
@@ -119,7 +116,7 @@ def test_compute_author_affinity_excludes_empty_handles() -> None:
 
     tweets = [
         _tweet("1", "alice"),
-        _tweet("2", ""),  # empty handle – must not contribute
+        _tweet("2", ""),  # empty handle - must not contribute
         _tweet("3", "alice"),
     ]
 
@@ -136,7 +133,7 @@ def test_compute_author_affinity_excludes_empty_handles() -> None:
 def test_recency_decay_at_anchor_returns_one() -> None:
     """``created == anchor`` → ``exp(0) == 1.0`` exactly."""
 
-    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
     created = _fmt_x_datetime(anchor)
 
     assert recency_decay(created, anchor, halflife_days=180.0) == 1.0
@@ -150,7 +147,7 @@ def test_recency_decay_one_halflife_returns_one_over_e() -> None:
     :func:`recency_decay`.
     """
 
-    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
     halflife = 30.0
     created = _fmt_x_datetime(anchor - timedelta(days=halflife))
 
@@ -168,7 +165,7 @@ def test_recency_decay_future_tweet_clamps_to_one() -> None:
     anchor must not produce ``decay > 1`` (which would inflate the score).
     """
 
-    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
     created = _fmt_x_datetime(anchor + timedelta(days=10))
 
     assert recency_decay(created, anchor, halflife_days=180.0) == 1.0
@@ -181,7 +178,7 @@ def test_recency_decay_unparseable_raises_value_error() -> None:
     term; direct callers see the raise.
     """
 
-    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
 
     with pytest.raises(ValueError):
         recency_decay("not a date", anchor, halflife_days=180.0)
@@ -198,7 +195,7 @@ def test_rank_feature_breakdown_sums_to_score() -> None:
     decomposition: there are no hidden offsets or non-summed terms.
     """
 
-    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
     tweet = _tweet(
         "100",
         "alice",
@@ -257,17 +254,13 @@ def _rank_one(
 def test_rank_monotonic_in_walker_relevance() -> None:
     """All features held constant: higher walker relevance → higher score."""
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     tweet = _tweet("1", "alice", created_at=_fmt_x_datetime(anchor))
     weights = RankerWeights()
     affinity: dict[str, float] = {}
 
-    low = _rank_one(
-        WalkerHit("1", 0.2, ""), tweet, affinity, weights, anchor
-    )
-    high = _rank_one(
-        WalkerHit("1", 0.9, ""), tweet, affinity, weights, anchor
-    )
+    low = _rank_one(WalkerHit("1", 0.2, ""), tweet, affinity, weights, anchor)
+    high = _rank_one(WalkerHit("1", 0.9, ""), tweet, affinity, weights, anchor)
 
     assert high.score > low.score
 
@@ -275,7 +268,7 @@ def test_rank_monotonic_in_walker_relevance() -> None:
 def test_rank_monotonic_in_author_affinity() -> None:
     """Higher precomputed affinity for the tweet's handle → higher score."""
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     tweet = _tweet("1", "alice", created_at=_fmt_x_datetime(anchor))
     weights = RankerWeights()
     hit = WalkerHit("1", 0.5, "")
@@ -298,7 +291,7 @@ def test_rank_monotonic_in_engagement_counts(field: str) -> None:
     feature in :class:`RankerWeights`.
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     base_kwargs = {
         "created_at": _fmt_x_datetime(anchor),
         "favorite_count": 1,
@@ -330,16 +323,12 @@ def test_rank_monotonic_in_recency() -> None:
     ``days`` means a larger contribution.
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     weights = RankerWeights()
     hit = WalkerHit("1", 0.5, "")
 
-    fresh_tweet = _tweet(
-        "1", "alice", created_at=_fmt_x_datetime(anchor - timedelta(days=1))
-    )
-    stale_tweet = _tweet(
-        "1", "alice", created_at=_fmt_x_datetime(anchor - timedelta(days=400))
-    )
+    fresh_tweet = _tweet("1", "alice", created_at=_fmt_x_datetime(anchor - timedelta(days=1)))
+    stale_tweet = _tweet("1", "alice", created_at=_fmt_x_datetime(anchor - timedelta(days=400)))
 
     fresh = _rank_one(hit, fresh_tweet, {}, weights, anchor)
     stale = _rank_one(hit, stale_tweet, {}, weights, anchor)
@@ -359,7 +348,7 @@ def test_rank_skips_walker_hit_when_tweet_missing() -> None:
     rather than raising.
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     present_tweet = _tweet("present", "alice", created_at=_fmt_x_datetime(anchor))
     hits = [
         WalkerHit("present", 0.6, "ok"),
@@ -394,7 +383,7 @@ def test_rank_sort_order_with_ties() -> None:
       - "tie_b" (relevance=0.5, higher tweet_id)
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     created = _fmt_x_datetime(anchor)
 
     def _t(tid: str) -> Tweet:
@@ -442,7 +431,7 @@ def test_rank_tie_break_by_walker_relevance_when_scores_equal() -> None:
     decides the order.
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     created = _fmt_x_datetime(anchor)
     tweets_by_id = {
         "x": _tweet("x", "alice", created_at=created),
@@ -458,9 +447,7 @@ def test_rank_tie_break_by_walker_relevance_when_scores_equal() -> None:
     weights = RankerWeights(relevance=0.0)
     ranked = rank(hits, tweets_by_id, {}, weights, anchor=anchor)
 
-    assert ranked[0].score == pytest.approx(
-        ranked[1].score, rel=1e-12, abs=1e-12
-    )
+    assert ranked[0].score == pytest.approx(ranked[1].score, rel=1e-12, abs=1e-12)
     # Higher walker_relevance comes first.
     assert ranked[0].tweet_id == "y"
     assert ranked[1].tweet_id == "x"
@@ -481,7 +468,7 @@ def test_rank_unparseable_created_at_zeros_recency_and_logs_once(
     error path.
     """
 
-    anchor = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
     bad_tweet_a = _tweet("a", "alice", created_at="not a date")
     bad_tweet_b = _tweet("b", "bob", created_at="also not a date")
     tweets_by_id = {"a": bad_tweet_a, "b": bad_tweet_b}
@@ -500,8 +487,8 @@ def test_rank_unparseable_created_at_zeros_recency_and_logs_once(
     # Single stderr line for the whole rank() call (not per-hit).
     captured = capsys.readouterr()
     stderr_lines = [
-        line for line in captured.err.splitlines() if "ranker" in line.lower()
-        or "recency" in line.lower()
-        or "unparseable" in line.lower()
+        line
+        for line in captured.err.splitlines()
+        if "ranker" in line.lower() or "recency" in line.lower() or "unparseable" in line.lower()
     ]
     assert len(stderr_lines) == 1

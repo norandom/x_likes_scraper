@@ -32,7 +32,6 @@ from x_likes_mcp.ranker import ScoredHit
 from x_likes_mcp.tree import TreeNode, TweetTree
 from x_likes_mcp.walker import WalkerError, WalkerHit
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 LIKES_JSON = FIXTURES_DIR / "likes.json"
 
@@ -152,9 +151,7 @@ def test_search_likes_forwards_filter_to_index_search() -> None:
     """``search_likes`` passes the four arguments through to ``index.search``."""
     idx = _make_index_mock()
     idx.search.return_value = []  # empty result list -> empty output
-    result = tools.search_likes(
-        idx, "x", year=2025, month_start="01", month_end="02"
-    )
+    result = tools.search_likes(idx, "x", year=2025, month_start="01", month_end="02")
     idx.search.assert_called_once_with("x", 2025, "01", "02")
     assert result == []
 
@@ -261,11 +258,7 @@ def test_search_likes_with_why_true_calls_walker_explainer(
         captured["top_results"] = top_results
         captured["query"] = query
         captured["index"] = index
-        return {
-            "1001": WalkerHit(
-                tweet_id="1001", relevance=0.91, why="explainer reason"
-            )
-        }
+        return {"1001": WalkerHit(tweet_id="1001", relevance=0.91, why="explainer reason")}
 
     monkeypatch.setattr(tools, "_call_walker_explainer", _fake_explainer)
 
@@ -314,9 +307,7 @@ def test_search_likes_with_why_true_explainer_passed_at_most_top_20(
     scored: list[ScoredHit] = []
     for n in range(30):
         tid = str(1000 + n)
-        tweets_by_id[tid] = _make_tweet_mock(
-            tweet_id=tid, text=f"t{n}", year_month="2025-01"
-        )
+        tweets_by_id[tid] = _make_tweet_mock(tweet_id=tid, text=f"t{n}", year_month="2025-01")
         scored.append(
             ScoredHit(
                 tweet_id=tid,
@@ -376,11 +367,7 @@ def test_search_likes_with_why_true_partial_merge_preserves_order(
         _query: str,
         _index: object,
     ) -> dict[str, WalkerHit]:
-        return {
-            "1002": WalkerHit(
-                tweet_id="1002", relevance=0.7, why="explained 1002"
-            )
-        }
+        return {"1002": WalkerHit(tweet_id="1002", relevance=0.7, why="explained 1002")}
 
     monkeypatch.setattr(tools, "_call_walker_explainer", _fake_explainer)
 

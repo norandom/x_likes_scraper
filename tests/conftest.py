@@ -38,7 +38,6 @@ from unittest.mock import patch
 import pytest
 import responses
 
-
 # Placeholder cookies that pass ``CookieManager.validate()``. Used by the
 # autouse cookies-guard fixture so that any accidental construction of
 # ``CookieManager`` during tests does not touch the disk and still yields a

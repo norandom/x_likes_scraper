@@ -6,6 +6,7 @@ Command-line interface for X Likes Exporter
 import argparse
 import sys
 from pathlib import Path
+
 from x_likes_exporter import XLikesExporter
 
 
@@ -46,7 +47,9 @@ Examples:
 
     parser.add_argument("cookies", help="Path to cookies.json file exported from browser")
     parser.add_argument("user_id", help="Your X (Twitter) user ID")
-    parser.add_argument("-o", "--output", default="output", help="Output directory (default: output)")
+    parser.add_argument(
+        "-o", "--output", default="output", help="Output directory (default: output)"
+    )
     parser.add_argument(
         "-f",
         "--format",
@@ -55,11 +58,19 @@ Examples:
         help="Export format(s). Can be specified multiple times. Use 'all' for all formats.",
     )
     parser.add_argument("--no-media", action="store_true", help="Skip downloading media files")
-    parser.add_argument("--include-raw", action="store_true", help="Include raw API response data in JSON export")
+    parser.add_argument(
+        "--include-raw", action="store_true", help="Include raw API response data in JSON export"
+    )
     parser.add_argument("--stats", action="store_true", help="Show statistics after export")
-    parser.add_argument("--resume", action="store_true", help="Resume from previous checkpoint if available")
-    parser.add_argument("--checkpoint-info", action="store_true", help="Show checkpoint information and exit")
-    parser.add_argument("--clear-checkpoint", action="store_true", help="Clear existing checkpoint and exit")
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume from previous checkpoint if available"
+    )
+    parser.add_argument(
+        "--checkpoint-info", action="store_true", help="Show checkpoint information and exit"
+    )
+    parser.add_argument(
+        "--clear-checkpoint", action="store_true", help="Clear existing checkpoint and exit"
+    )
     parser.add_argument(
         "--single-file",
         action="store_true",

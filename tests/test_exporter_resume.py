@@ -21,7 +21,6 @@ to ``XLikesExporter`` does not need to point at a real file.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 import pytest
 
@@ -77,10 +76,10 @@ def test_resume_same_user_dedupes_and_uses_cursor(
         user_id: str,
         progress_callback=None,
         stop_callback=None,
-        start_cursor: Optional[str] = None,
+        start_cursor: str | None = None,
         checkpoint_callback=None,
         checkpoint_interval: int = 10,
-    ) -> List[Tweet]:
+    ) -> list[Tweet]:
         captured["user_id"] = user_id
         captured["start_cursor"] = start_cursor
         return [t2_dup, t3]
@@ -104,9 +103,7 @@ def test_resume_same_user_dedupes_and_uses_cursor(
 
     result_ids = [t.id for t in result]
     # Explicit duplicate-id assertion: no id appears more than once.
-    assert len(result_ids) == len(set(result_ids)), (
-        f"Result contains duplicate ids: {result_ids}"
-    )
+    assert len(result_ids) == len(set(result_ids)), f"Result contains duplicate ids: {result_ids}"
     assert set(result_ids) == {"1", "2", "3"}
 
 
@@ -143,10 +140,10 @@ def test_resume_different_user_clears_checkpoint(
         user_id: str,
         progress_callback=None,
         stop_callback=None,
-        start_cursor: Optional[str] = None,
+        start_cursor: str | None = None,
         checkpoint_callback=None,
         checkpoint_interval: int = 10,
-    ) -> List[Tweet]:
+    ) -> list[Tweet]:
         captured["user_id"] = user_id
         captured["start_cursor"] = start_cursor
         return [t_new1, t_new2]
@@ -166,15 +163,13 @@ def test_resume_different_user_clears_checkpoint(
 
     # 4. Assertions: fresh fetch, no merge with A's data, checkpoint cleared.
     assert captured["user_id"] == "B"
-    assert captured["start_cursor"] is None, (
-        "Mismatched checkpoint user must not contribute its cursor"
-    )
+    assert (
+        captured["start_cursor"] is None
+    ), "Mismatched checkpoint user must not contribute its cursor"
 
     result_ids = [t.id for t in result]
     assert result_ids == ["b1", "b2"]
-    assert "a1" not in result_ids, (
-        "Tweets from a different user's checkpoint must not be merged in"
-    )
+    assert "a1" not in result_ids, "Tweets from a different user's checkpoint must not be merged in"
 
     # The stale checkpoint for "A" must be gone after the call.
     fresh_checkpoint = Checkpoint(str(tmp_path))

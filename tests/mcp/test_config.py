@@ -335,9 +335,7 @@ def test_resolve_env_shell_overrides_dotenv(
 
     dotenv = tmp_path / ".env"
     dotenv.write_text(
-        "OPENAI_BASE_URL=from_file\n"
-        "OPENAI_MODEL=from_file\n"
-        "RANKER_W_RELEVANCE=10\n",
+        "OPENAI_BASE_URL=from_file\nOPENAI_MODEL=from_file\nRANKER_W_RELEVANCE=10\n",
         encoding="utf-8",
     )
     os.environ["RANKER_W_RELEVANCE"] = "42"

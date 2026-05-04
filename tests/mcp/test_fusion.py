@@ -97,12 +97,8 @@ class TestKRrfParameter:
         # We can't observe scores from the public API, but we can confirm
         # ties resolve identically regardless of k_rrf when the rank-shape
         # is symmetric across rankings.
-        result_k60 = reciprocal_rank_fusion(
-            [["a"], ["b"]], k_rrf=60
-        )
-        result_k1 = reciprocal_rank_fusion(
-            [["a"], ["b"]], k_rrf=1
-        )
+        result_k60 = reciprocal_rank_fusion([["a"], ["b"]], k_rrf=60)
+        result_k1 = reciprocal_rank_fusion([["a"], ["b"]], k_rrf=1)
         # Both rank-1 in their respective ranking → tied → insertion order wins.
         assert result_k60 == ["a", "b"]
         assert result_k1 == ["a", "b"]
@@ -145,9 +141,7 @@ class TestThreeRankingsComplexOverlap:
         # d: 1/63 + 1/62           ≈ 0.01587 + 0.01613 = 0.03200
         # e: 1/63                  ≈ 0.01587
         # Order (descending): c > b > d > a > e.
-        result = reciprocal_rank_fusion(
-            [["a", "b", "c"], ["b", "c", "d"], ["c", "d", "e"]]
-        )
+        result = reciprocal_rank_fusion([["a", "b", "c"], ["b", "c", "d"], ["c", "d", "e"]])
         assert result == ["c", "b", "d", "a", "e"]
 
     def test_three_rankings_score_math_explicitly(self) -> None:

@@ -171,12 +171,8 @@ def load_config(
     # documented defaults; the API key is allowed to be ``None`` here and is
     # surfaced as an error later, at index-build time, so a developer can
     # run the walker (and the config tests) without an OpenRouter key.
-    openrouter_base_url = (
-        resolved.get("OPENROUTER_BASE_URL", "") or DEFAULT_OPENROUTER_BASE_URL
-    )
-    embedding_model = (
-        resolved.get("EMBEDDING_MODEL", "") or DEFAULT_EMBEDDING_MODEL
-    )
+    openrouter_base_url = resolved.get("OPENROUTER_BASE_URL", "") or DEFAULT_OPENROUTER_BASE_URL
+    embedding_model = resolved.get("EMBEDDING_MODEL", "") or DEFAULT_EMBEDDING_MODEL
     openrouter_api_key_raw = resolved.get("OPENROUTER_API_KEY", "") or ""
     openrouter_api_key: str | None = openrouter_api_key_raw or None
 

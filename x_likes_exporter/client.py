@@ -2,16 +2,18 @@
 X (Twitter) API client with rate limiting and pagination support
 """
 
-import time
 import json
-import requests
-from typing import Optional, Dict, Any, List, Callable
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from .cookies import CookieManager
-from .auth import XAuthenticator
-from .models import Tweet
-from . import parser
+from typing import Any
 
+import requests
+
+from . import parser
+from .auth import XAuthenticator
+from .cookies import CookieManager
+from .models import Tweet
 
 # Feature flags the X GraphQL API requires on every Likes request.
 # Extracted as a module-level constant so fetch_likes stays small and so
@@ -60,6 +62,7 @@ LIKES_API_FEATURES = {
 @dataclass
 class RateLimitInfo:
     """Rate limit information from API response"""
+
     limit: int
     remaining: int
     reset: int  # Unix timestamp
@@ -88,16 +91,16 @@ class XAPIClient:
         self.cookie_manager = cookie_manager
         self.authenticator = XAuthenticator(cookie_manager)
         self.session = requests.Session()
-        self.rate_limit_info: Optional[RateLimitInfo] = None
+        self.rate_limit_info: RateLimitInfo | None = None
         self._request_delay = 1.0  # seconds between requests, to stay under the rate limit
 
     def fetch_likes(
         self,
         user_id: str,
-        cursor: Optional[str] = None,
+        cursor: str | None = None,
         count: int = 20,
-        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None
-    ) -> tuple[List[Tweet], Optional[str], RateLimitInfo]:
+        progress_callback: Callable[[int, int | None], None] | None = None,
+    ) -> tuple[list[Tweet], str | None, RateLimitInfo]:
         """
         Fetch a page of liked tweets
 
@@ -126,7 +129,7 @@ class XAPIClient:
             "withClientEventToken": False,
             "withBirdwatchNotes": False,
             "withVoice": True,
-            "withV2Timeline": True
+            "withV2Timeline": True,
         }
 
         if cursor:
@@ -154,10 +157,7 @@ class XAPIClient:
         # Make request
         try:
             response = self.session.get(
-                url,
-                params=params,
-                headers=headers,
-                cookies=self.cookie_manager.get_cookie_dict()
+                url, params=params, headers=headers, cookies=self.cookie_manager.get_cookie_dict()
             )
             response.raise_for_status()
 
@@ -165,7 +165,7 @@ class XAPIClient:
             rate_limit_info = RateLimitInfo(
                 limit=int(response.headers.get("x-rate-limit-limit", 0)),
                 remaining=int(response.headers.get("x-rate-limit-remaining", 0)),
-                reset=int(response.headers.get("x-rate-limit-reset", 0))
+                reset=int(response.headers.get("x-rate-limit-reset", 0)),
             )
             self.rate_limit_info = rate_limit_info
 
@@ -182,23 +182,23 @@ class XAPIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                raise Exception("Rate limit exceeded. Please wait before retrying.")
+                raise Exception("Rate limit exceeded. Please wait before retrying.") from e
             elif e.response.status_code == 401:
-                raise Exception("Authentication failed. Please check your cookies.")
+                raise Exception("Authentication failed. Please check your cookies.") from e
             else:
-                raise Exception(f"HTTP error {e.response.status_code}: {e}")
+                raise Exception(f"HTTP error {e.response.status_code}: {e}") from e
         except Exception as e:
-            raise Exception(f"Error fetching likes: {e}")
+            raise Exception(f"Error fetching likes: {e}") from e
 
     def fetch_all_likes(
         self,
         user_id: str,
-        progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
-        stop_callback: Optional[Callable[[], bool]] = None,
-        start_cursor: Optional[str] = None,
-        checkpoint_callback: Optional[Callable[[List[Tweet], Optional[str]], None]] = None,
-        checkpoint_interval: int = 10
-    ) -> List[Tweet]:
+        progress_callback: Callable[[int, int | None], None] | None = None,
+        stop_callback: Callable[[], bool] | None = None,
+        start_cursor: str | None = None,
+        checkpoint_callback: Callable[[list[Tweet], str | None], None] | None = None,
+        checkpoint_interval: int = 10,
+    ) -> list[Tweet]:
         """
         Fetch all liked tweets with automatic pagination and rate limit handling
 
@@ -232,9 +232,7 @@ class XAPIClient:
             # Fetch page
             print(f"Fetching page {page_count + 1}...")
             tweets, next_cursor, rate_limit = self.fetch_likes(
-                user_id=user_id,
-                cursor=cursor,
-                count=20
+                user_id=user_id, cursor=cursor, count=20
             )
 
             # Add tweets to collection
@@ -274,14 +272,14 @@ class XAPIClient:
         print(f"Fetch complete! Total likes: {len(all_tweets)}")
         return all_tweets
 
-    def _extract_tweets(self, response: Dict[str, Any]) -> List[Tweet]:
+    def _extract_tweets(self, response: dict[str, Any]) -> list[Tweet]:
         """Extract tweets from API response. Delegates to parser.extract_tweets."""
         return parser.extract_tweets(response)
 
-    def _parse_tweet(self, tweet_data: Dict[str, Any]) -> Optional[Tweet]:
+    def _parse_tweet(self, tweet_data: dict[str, Any]) -> Tweet | None:
         """Parse tweet data into Tweet model. Delegates to parser.parse_tweet."""
         return parser.parse_tweet(tweet_data)
 
-    def _extract_cursor(self, response: Dict[str, Any]) -> Optional[str]:
+    def _extract_cursor(self, response: dict[str, Any]) -> str | None:
         """Extract next cursor from API response. Delegates to parser.extract_cursor."""
         return parser.extract_cursor(response)

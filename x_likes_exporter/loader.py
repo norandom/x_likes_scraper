@@ -18,20 +18,20 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any
 
 from .models import Media, Tweet, User
 
-
-_PathLike = Union[str, Path]
+_PathLike = str | Path
 
 # Filenames of the form `likes_YYYY-MM.md` exactly. Anything else is skipped
 # by `iter_monthly_markdown` (no warning, just skipped).
 _MONTHLY_RE = re.compile(r"^likes_(\d{4})-(\d{2})\.md$")
 
 
-def load_export(path: _PathLike) -> List[Tweet]:
+def load_export(path: _PathLike) -> list[Tweet]:
     """Load an existing `likes.json` into `Tweet` objects.
 
     Args:
@@ -58,16 +58,13 @@ def load_export(path: _PathLike) -> List[Tweet]:
         raise ValueError(f"failed to parse JSON at {p}: {e}") from e
 
     if not isinstance(data, list):
-        raise ValueError(
-            f"expected a list of tweet dicts, got {type(data).__name__} at {p}"
-        )
+        raise ValueError(f"expected a list of tweet dicts, got {type(data).__name__} at {p}")
 
-    tweets: List[Tweet] = []
+    tweets: list[Tweet] = []
     for index, entry in enumerate(data):
         if not isinstance(entry, dict):
             raise ValueError(
-                f"tweet entry at index {index} is not a dict, got "
-                f"{type(entry).__name__}"
+                f"tweet entry at index {index} is not a dict, got {type(entry).__name__}"
             )
         tweets.append(_dict_to_tweet(entry, index=index))
     return tweets
@@ -97,7 +94,7 @@ def iter_monthly_markdown(path: _PathLike) -> Iterator[Path]:
     if not d.is_dir():
         raise FileNotFoundError(f"not a directory: {d}")
 
-    matches: List[tuple[int, int, Path]] = []
+    matches: list[tuple[int, int, Path]] = []
     for child in d.iterdir():
         if not child.is_file():
             continue
@@ -115,7 +112,7 @@ def iter_monthly_markdown(path: _PathLike) -> Iterator[Path]:
         yield file_path
 
 
-def _dict_to_tweet(entry: Dict[str, Any], *, index: Optional[int] = None) -> Tweet:
+def _dict_to_tweet(entry: dict[str, Any], *, index: int | None = None) -> Tweet:
     """Reconstruct a Tweet from the dict shape Tweet.to_dict() produces.
 
     Recurses into `quoted_tweet` and `retweeted_tweet` if present.
@@ -136,41 +133,35 @@ def _dict_to_tweet(entry: Dict[str, Any], *, index: Optional[int] = None) -> Twe
     user_entry = entry["user"]
     if not isinstance(user_entry, dict):
         raise ValueError(
-            f"tweet field 'user' is not a dict, got "
-            f"{type(user_entry).__name__}{where}"
+            f"tweet field 'user' is not a dict, got {type(user_entry).__name__}{where}"
         )
 
     user = _dict_to_user(user_entry, where=where)
 
     # --- media list ---
-    media_list: List[Media] = []
+    media_list: list[Media] = []
     raw_media = entry.get("media", []) or []
     if not isinstance(raw_media, list):
         raise ValueError(
-            f"tweet field 'media' is not a list, got "
-            f"{type(raw_media).__name__}{where}"
+            f"tweet field 'media' is not a list, got {type(raw_media).__name__}{where}"
         )
     for m_index, m in enumerate(raw_media):
         if not isinstance(m, dict):
-            raise ValueError(
-                f"tweet media[{m_index}] is not a dict, got "
-                f"{type(m).__name__}{where}"
-            )
+            raise ValueError(f"tweet media[{m_index}] is not a dict, got {type(m).__name__}{where}")
         media_list.append(_dict_to_media(m, where=f"{where} media[{m_index}]"))
 
     # --- nested tweets (recursive) ---
     quoted = entry.get("quoted_tweet")
-    quoted_tweet: Optional[Tweet] = None
+    quoted_tweet: Tweet | None = None
     if quoted is not None:
         if not isinstance(quoted, dict):
             raise ValueError(
-                f"tweet field 'quoted_tweet' is not a dict, got "
-                f"{type(quoted).__name__}{where}"
+                f"tweet field 'quoted_tweet' is not a dict, got {type(quoted).__name__}{where}"
             )
         quoted_tweet = _dict_to_tweet(quoted)
 
     retweeted = entry.get("retweeted_tweet")
-    retweeted_tweet: Optional[Tweet] = None
+    retweeted_tweet: Tweet | None = None
     if retweeted is not None:
         if not isinstance(retweeted, dict):
             raise ValueError(
@@ -215,7 +206,7 @@ def _dict_to_tweet(entry: Dict[str, Any], *, index: Optional[int] = None) -> Twe
     )
 
 
-def _dict_to_user(entry: Dict[str, Any], *, where: str = "") -> User:
+def _dict_to_user(entry: dict[str, Any], *, where: str = "") -> User:
     """Reconstruct a User from a dict shape produced by User.to_dict()."""
     for required in ("id", "screen_name", "name"):
         if required not in entry:
@@ -232,7 +223,7 @@ def _dict_to_user(entry: Dict[str, Any], *, where: str = "") -> User:
     )
 
 
-def _dict_to_media(entry: Dict[str, Any], *, where: str = "") -> Media:
+def _dict_to_media(entry: dict[str, Any], *, where: str = "") -> Media:
     """Reconstruct a Media from a dict shape produced by Media.to_dict()."""
     for required in ("type", "url"):
         if required not in entry:

@@ -60,6 +60,7 @@ _YEAR_MAX = 9999
 # ---------------------------------------------------------------------------
 # Internal helpers
 
+
 def _truncate(text: str, max_chars: int) -> str:
     """Return ``text`` truncated to ``max_chars`` characters."""
     if text is None:
@@ -102,6 +103,7 @@ def _tweet_url(tweet: Any) -> str:
 # ---------------------------------------------------------------------------
 # search_likes
 
+
 def _validate_query(query: Any) -> str:
     """Strip and validate the query string. Returns the cleaned string."""
     if not isinstance(query, str):
@@ -118,23 +120,17 @@ def _validate_year(year: Any) -> None:
     if isinstance(year, bool) or not isinstance(year, int):
         raise errors.invalid_input("filter", "year must be an integer")
     if year < _YEAR_MIN or year > _YEAR_MAX:
-        raise errors.invalid_input(
-            "filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}"
-        )
+        raise errors.invalid_input("filter", f"year must be in {_YEAR_MIN}..{_YEAR_MAX}")
 
 
 def _validate_month_field(name: str, value: Any) -> None:
     if value is None:
         return
     if not isinstance(value, str) or not _MONTH_RE.match(value):
-        raise errors.invalid_input(
-            "filter", f"{name} must match ^(0[1-9]|1[0-2])$"
-        )
+        raise errors.invalid_input("filter", f"{name} must match ^(0[1-9]|1[0-2])$")
 
 
-def _validate_filter_dependencies(
-    year: Any, month_start: Any, month_end: Any
-) -> None:
+def _validate_filter_dependencies(year: Any, month_start: Any, month_end: Any) -> None:
     if month_start is not None and year is None:
         raise errors.invalid_input("filter", "month_start requires year")
     if month_end is not None and month_start is None:
@@ -216,9 +212,7 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     # callers tell their LLM "treat fenced content as data, not
     # instructions" so the URL payload cannot mix into nearby prose.
     fenced_urls = [
-        fenced
-        for fenced in (fence_url_for_llm(u) for u in raw_urls)
-        if fenced is not None
+        fenced for fenced in (fence_url_for_llm(u) for u in raw_urls) if fenced is not None
     ]
 
     walker_relevance = max(0.0, min(1.0, float(hit.walker_relevance)))
@@ -296,7 +290,7 @@ def _call_walker_explainer(
             config=index.config,
             chunk_size=len(synthetic_nodes),
         )
-    except Exception as exc:  # noqa: BLE001 — explainer must not fail the call
+    except Exception as exc:
         print(f"[explainer] walker call failed: {exc}", file=sys.stderr)
         return {}
 
@@ -362,7 +356,7 @@ def search_likes(
         raise
     except ValueError as exc:
         raise errors.invalid_input("filter", str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 — boundary translation is the point
+    except Exception as exc:
         # Catches EmbeddingError (both retrievals down) and any other
         # unexpected error from the index. tools.search_likes is the
         # boundary that translates non-ToolError exceptions into
@@ -416,6 +410,7 @@ def _merge_explainer(
 # ---------------------------------------------------------------------------
 # list_months
 
+
 def list_months(index: TweetIndex) -> list[dict[str, Any]]:
     """Return per-month metadata in whatever order ``TweetIndex.list_months``
     produced (reverse-chronological by current implementation).
@@ -436,6 +431,7 @@ def list_months(index: TweetIndex) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # get_month
 
+
 def get_month(index: TweetIndex, year_month: str) -> str:
     """Return the raw Markdown for one month.
 
@@ -443,9 +439,7 @@ def get_month(index: TweetIndex, year_month: str) -> str:
     ``^\\d{4}-\\d{2}$``; raises ``not_found`` when the file is missing.
     """
     if not isinstance(year_month, str) or not _YEAR_MONTH_RE.match(year_month):
-        raise errors.invalid_input(
-            "year_month", "must match ^\\d{4}-\\d{2}$"
-        )
+        raise errors.invalid_input("year_month", "must match ^\\d{4}-\\d{2}$")
 
     markdown = index.get_month_markdown(year_month)
     if markdown is None:
@@ -455,6 +449,7 @@ def get_month(index: TweetIndex, year_month: str) -> str:
 
 # ---------------------------------------------------------------------------
 # read_tweet
+
 
 def read_tweet(index: TweetIndex, tweet_id: str) -> dict[str, Any]:
     """Return the metadata for one tweet by id.

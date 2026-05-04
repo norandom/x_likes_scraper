@@ -4,12 +4,13 @@ Media downloader for tweet images and videos
 
 import os
 import re
-import requests
 from pathlib import Path
-from typing import List, Optional
 from urllib.parse import urlparse
+
+import requests
 from PIL import Image
-from .models import Tweet, Media
+
+from .models import Media, Tweet
 
 
 class MediaDownloader:
@@ -26,7 +27,7 @@ class MediaDownloader:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
 
-    def download_tweet_media(self, tweet: Tweet) -> List[str]:
+    def download_tweet_media(self, tweet: Tweet) -> list[str]:
         """
         Download all media from a tweet
 
@@ -49,7 +50,7 @@ class MediaDownloader:
 
         return downloaded_files
 
-    def download_media(self, media: Media, tweet_id: str, index: int = 0) -> Optional[str]:
+    def download_media(self, media: Media, tweet_id: str, index: int = 0) -> str | None:
         """
         Download a single media file
 
@@ -74,8 +75,8 @@ class MediaDownloader:
         # For photos, get the highest quality
         if media.type == "photo" and media.media_url:
             # Remove size suffix and add :orig for original quality
-            download_url = re.sub(r'\?.*$', '', download_url)
-            if not download_url.endswith(':orig'):
+            download_url = re.sub(r"\?.*$", "", download_url)
+            if not download_url.endswith(":orig"):
                 download_url = f"{download_url}?format=jpg&name=orig"
 
         try:
@@ -84,7 +85,7 @@ class MediaDownloader:
             response.raise_for_status()
 
             # Determine file extension
-            content_type = response.headers.get('content-type', '')
+            content_type = response.headers.get("content-type", "")
             ext = self._get_extension(download_url, content_type, media.type)
 
             # Generate filename
@@ -92,11 +93,11 @@ class MediaDownloader:
             filepath = self.output_dir / filename
 
             # Save the file
-            with open(filepath, 'wb') as f:
+            with open(filepath, "wb") as f:
                 f.write(response.content)
 
             # Optimize images
-            if media.type == "photo" and ext in ['.jpg', '.jpeg', '.png']:
+            if media.type == "photo" and ext in [".jpg", ".jpeg", ".png"]:
                 self._optimize_image(filepath)
 
             return str(filepath)
@@ -105,7 +106,7 @@ class MediaDownloader:
             print(f"Error downloading {download_url}: {e}")
             return None
 
-    def download_all_media(self, tweets: List[Tweet], progress_callback=None) -> int:
+    def download_all_media(self, tweets: list[Tweet], progress_callback=None) -> int:
         """
         Download media from all tweets
 
@@ -132,32 +133,30 @@ class MediaDownloader:
         # Try to get extension from URL
         parsed = urlparse(url)
         path = parsed.path
-        if '.' in path:
+        if "." in path:
             ext = os.path.splitext(path)[1]
             if ext:
                 return ext.lower()
 
         # Try to get from content-type
-        if 'image/jpeg' in content_type or 'image/jpg' in content_type:
-            return '.jpg'
-        elif 'image/png' in content_type:
-            return '.png'
-        elif 'image/gif' in content_type:
-            return '.gif'
-        elif 'image/webp' in content_type:
-            return '.webp'
-        elif 'video/mp4' in content_type:
-            return '.mp4'
+        if "image/jpeg" in content_type or "image/jpg" in content_type:
+            return ".jpg"
+        elif "image/png" in content_type:
+            return ".png"
+        elif "image/gif" in content_type:
+            return ".gif"
+        elif "image/webp" in content_type:
+            return ".webp"
+        elif "video/mp4" in content_type:
+            return ".mp4"
 
-        # Fallback based on media type
-        if media_type == 'photo':
-            return '.jpg'
-        elif media_type == 'video':
-            return '.mp4'
-        elif media_type == 'animated_gif':
-            return '.gif'
-
-        return '.jpg'  # Default
+        # Fallback based on media type. Default to .jpg when the media
+        # type is missing or unrecognized.
+        return {
+            "photo": ".jpg",
+            "video": ".mp4",
+            "animated_gif": ".gif",
+        }.get(media_type, ".jpg")
 
     def _optimize_image(self, filepath: Path, max_size: tuple = (1920, 1920), quality: int = 85):
         """
@@ -171,8 +170,8 @@ class MediaDownloader:
         try:
             with Image.open(filepath) as img:
                 # Convert RGBA to RGB if necessary
-                if img.mode == 'RGBA':
-                    background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == "RGBA":
+                    background = Image.new("RGB", img.size, (255, 255, 255))
                     background.paste(img, mask=img.split()[3])
                     img = background
 

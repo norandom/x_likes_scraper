@@ -19,7 +19,7 @@ import asyncio
 import json
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import mcp.types as mcp_types
@@ -98,7 +98,7 @@ _TWEET_METADATA_SCHEMA: dict[str, Any] = {
 
 def _current_year() -> int:
     """Year used as the upper bound for the ``year`` filter at startup."""
-    return datetime.now(timezone.utc).year
+    return datetime.now(UTC).year
 
 
 def _search_likes_tool(year_max: int) -> mcp_types.Tool:
@@ -246,6 +246,7 @@ def _build_tool_definitions() -> list[mcp_types.Tool]:
 # ---------------------------------------------------------------------------
 # Boundary error wrapper
 
+
 def _error_payload(category: str, message: str) -> dict[str, Any]:
     """Shape an MCP-error payload carrying our stable category/message."""
     return {"error": {"category": category, "message": message}}
@@ -266,11 +267,7 @@ def _error_result(category: str, message: str) -> mcp_types.CallToolResult:
 def _success_result(structured: dict[str, Any]) -> mcp_types.CallToolResult:
     """Build a successful ``CallToolResult`` with structured + text content."""
     return mcp_types.CallToolResult(
-        content=[
-            mcp_types.TextContent(
-                type="text", text=json.dumps(structured, indent=2)
-            )
-        ],
+        content=[mcp_types.TextContent(type="text", text=json.dumps(structured, indent=2))],
         structuredContent=structured,
         isError=False,
     )
@@ -279,9 +276,8 @@ def _success_result(structured: dict[str, Any]) -> mcp_types.CallToolResult:
 # ---------------------------------------------------------------------------
 # Tool dispatch
 
-def _dispatch(
-    index: TweetIndex, name: str, arguments: dict[str, Any]
-) -> dict[str, Any]:
+
+def _dispatch(index: TweetIndex, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call into the matching tools handler and shape the structured output.
 
     Raises ``ToolError`` for invalid-input / not-found / upstream-failure
@@ -316,6 +312,7 @@ def _dispatch(
 # ---------------------------------------------------------------------------
 # Public API
 
+
 def build_server(index: TweetIndex) -> Server:
     """Construct the MCP :class:`Server`, register the four tools, and
     return the server instance.
@@ -341,7 +338,7 @@ def build_server(index: TweetIndex) -> Server:
             structured = _dispatch(index, name, arguments)
         except ToolError as exc:
             return _error_result(exc.category, exc.message)
-        except Exception:  # noqa: BLE001 — boundary translation
+        except Exception:
             traceback.print_exc(file=sys.stderr)
             return _error_result(
                 "upstream_failure",

@@ -7,12 +7,11 @@ unparseable input do so locally.
 """
 
 from datetime import datetime
-from typing import Optional
 
 X_CREATED_AT_FORMAT = "%a %b %d %H:%M:%S %z %Y"
 
 
-def parse_x_datetime(value: str) -> Optional[datetime]:
+def parse_x_datetime(value: str) -> datetime | None:
     """Parse an X created_at string. Returns None on any failure."""
     if not isinstance(value, str) or not value:
         return None

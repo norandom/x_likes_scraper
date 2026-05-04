@@ -13,7 +13,7 @@ isolation under the autouse network/cookie guards in ``conftest.py``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -35,7 +35,7 @@ def test_parses_valid_x_format() -> None:
     assert result.second == 17
     # Timezone-aware comparison: the offset must be UTC (+0000).
     assert result.tzinfo is not None
-    assert result.utcoffset() == timezone.utc.utcoffset(result)
+    assert result.utcoffset() == UTC.utcoffset(result)
 
 
 def test_returns_none_on_empty_string() -> None:

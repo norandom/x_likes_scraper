@@ -23,10 +23,9 @@ import re
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from datetime import datetime, timezone
 
 from x_likes_exporter import iter_monthly_markdown, load_export
 
@@ -56,7 +55,7 @@ logger = logging.getLogger(__name__)
 _MONTHLY_FILENAME_RE = re.compile(r"^likes_(\d{4}-\d{2})\.md$")
 
 
-class IndexError(Exception):  # noqa: A001 (intentional shadow inside this module's namespace)
+class IndexError(Exception):
     """Raised when the index cannot be built or loaded."""
 
 
@@ -69,9 +68,7 @@ class MonthInfo:
     tweet_count: int | None
 
 
-def _check_filter_deps(
-    year: int | None, month_start: str | None, month_end: str | None
-) -> None:
+def _check_filter_deps(year: int | None, month_start: str | None, month_end: str | None) -> None:
     """Reject filter combinations that violate the dependency rules."""
 
     if month_start is None and month_end is not None:
@@ -80,9 +77,7 @@ def _check_filter_deps(
         raise ValueError("filter: month_start requires year")
 
 
-def _parse_month_range(
-    month_start: str, month_end: str | None
-) -> tuple[int, int | None]:
+def _parse_month_range(month_start: str, month_end: str | None) -> tuple[int, int | None]:
     """Parse two-digit month strings to ints in ``1..12``.
 
     Returns ``(start, end)``. ``end`` is ``None`` when ``month_end`` was
@@ -94,9 +89,7 @@ def _parse_month_range(
         ms = int(month_start)
         me = int(month_end) if month_end is not None else None
     except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "filter: month values must be two-digit numeric strings"
-        ) from exc
+        raise ValueError("filter: month values must be two-digit numeric strings") from exc
 
     if not (1 <= ms <= 12):
         raise ValueError("filter: month_start must be in 01..12")
@@ -114,9 +107,7 @@ def _compute_author_affinity(tweets: list[Tweet]) -> dict[str, float]:
     Lives here for now; task 3.3c moves it into ``ranker.py`` and this
     module re-imports.
     """
-    counts: Counter[str] = Counter(
-        t.user.screen_name for t in tweets if t.user.screen_name
-    )
+    counts: Counter[str] = Counter(t.user.screen_name for t in tweets if t.user.screen_name)
     return {handle: math.log1p(count) for handle, count in counts.items()}
 
 
@@ -433,7 +424,7 @@ class TweetIndex:
                 k=200,
                 restrict_to_ids=candidate_ids,
             )
-        except Exception as exc:  # noqa: BLE001 (broad on purpose; we degrade)
+        except Exception as exc:
             logger.warning("[search] dense retrieval failed: %s", exc)
             dense_ranking = []
 
@@ -442,25 +433,19 @@ class TweetIndex:
         # for symmetry (req 7.5).
         bm25_ranking: list[tuple[str, float]]
         try:
-            bm25_ranking = self.bm25.top_k(
-                query, k=200, restrict_to_ids=candidate_ids
-            )
-        except Exception as exc:  # noqa: BLE001
+            bm25_ranking = self.bm25.top_k(query, k=200, restrict_to_ids=candidate_ids)
+        except Exception as exc:
             logger.warning("[search] bm25 retrieval failed: %s", exc)
             bm25_ranking = []
 
         # Both retrievals down: cannot recover. Raise so tools.py can map
         # to ``upstream_failure`` (req 7.6).
         if not dense_ranking and not bm25_ranking:
-            raise EmbeddingError(
-                "both retrieval paths failed for this query"
-            )
+            raise EmbeddingError("both retrieval paths failed for this query")
 
         dense_ids = [tid for tid, _ in dense_ranking]
         bm25_ids = [tid for tid, _ in bm25_ranking]
-        dense_score_by_id: dict[str, float] = {
-            tid: score for tid, score in dense_ranking
-        }
+        dense_score_by_id: dict[str, float] = dict(dense_ranking)
 
         fused_ids = reciprocal_rank_fusion(
             [dense_ids, bm25_ids],
@@ -499,20 +484,21 @@ def _compute_anchor(
     - end of ``year`` if only ``year`` set
     - ``datetime.now(timezone.utc)`` otherwise
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
 
     if year is None:
         return now_utc
 
     if month_start is None and month_end is None:
-        return datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        return datetime(year, 12, 31, 23, 59, 59, tzinfo=UTC)
 
     target_month_str = month_end or month_start
+    # ``_resolve_filter`` rejected the all-None case above, so by this
+    # branch at least one of ``month_end`` / ``month_start`` is set.
+    assert target_month_str is not None
     target_month = int(target_month_str)  # already validated by _resolve_filter
     if target_month == 12:
-        return datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-    next_month_first = datetime(year, target_month + 1, 1, tzinfo=timezone.utc)
+        return datetime(year, 12, 31, 23, 59, 59, tzinfo=UTC)
+    next_month_first = datetime(year, target_month + 1, 1, tzinfo=UTC)
     # End of target_month = first of next month minus a microsecond.
-    return datetime.fromtimestamp(
-        next_month_first.timestamp() - 0.000001, tz=timezone.utc
-    )
+    return datetime.fromtimestamp(next_month_first.timestamp() - 0.000001, tz=UTC)

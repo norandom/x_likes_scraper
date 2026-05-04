@@ -15,17 +15,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
-
-import pytest
+from typing import Any
 
 from x_likes_exporter.parser import extract_cursor, extract_tweets, parse_tweet
-
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
-def load_fixture(name: str) -> Dict[str, Any]:
+def load_fixture(name: str) -> dict[str, Any]:
     """Load and parse a JSON fixture from ``tests/fixtures/<name>``."""
     path = FIXTURES_DIR / name
     with path.open("r", encoding="utf-8") as fh:
@@ -33,7 +30,7 @@ def load_fixture(name: str) -> Dict[str, Any]:
 
 
 # Helper to build the minimum response envelope that extract_tweets walks.
-def _build_response(entries: list) -> Dict[str, Any]:
+def _build_response(entries: list) -> dict[str, Any]:
     return {
         "data": {
             "user": {
@@ -54,7 +51,7 @@ def _build_response(entries: list) -> Dict[str, Any]:
     }
 
 
-def _wrap_tweet_entry(tweet_data: Dict[str, Any], entry_id: str = "tweet-1") -> Dict[str, Any]:
+def _wrap_tweet_entry(tweet_data: dict[str, Any], entry_id: str = "tweet-1") -> dict[str, Any]:
     return {
         "entryId": entry_id,
         "content": {

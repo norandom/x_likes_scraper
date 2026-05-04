@@ -114,7 +114,7 @@ class BM25Index:
     ordered_ids: list[str]
 
     @classmethod
-    def build(cls, tweets_by_id: dict[str, "Tweet"]) -> "BM25Index":
+    def build(cls, tweets_by_id: dict[str, Tweet]) -> BM25Index:
         """Build a BM25 index from a tweet-id -> Tweet mapping.
 
         The id list is sorted lexicographically so two builds over the
@@ -133,9 +133,7 @@ class BM25Index:
         if not ordered_ids:
             return cls(bm25=None, ordered_ids=[])
 
-        tokenized = [
-            tokenize(tweet_index_text(tweets_by_id[tid])) for tid in ordered_ids
-        ]
+        tokenized = [tokenize(tweet_index_text(tweets_by_id[tid])) for tid in ordered_ids]
 
         # ``BM25Okapi`` divides by the average document length; if every
         # document tokenizes to ``[]`` the average is 0 and the
@@ -172,15 +170,15 @@ class BM25Index:
         if restrict_to_ids is not None and not restrict_to_ids:
             return []
 
-        scores = np.asarray(self.bm25.get_scores(tokens), dtype=np.float64)
-        scores = self._apply_restrict_mask(scores, restrict_to_ids)
-        if scores is None:
+        raw_scores = np.asarray(self.bm25.get_scores(tokens), dtype=np.float64)
+        masked = self._apply_restrict_mask(raw_scores, restrict_to_ids)
+        if masked is None:
             return []
 
         return [
-            (self.ordered_ids[int(i)], float(scores[i]))
-            for i in _top_k_indices(scores, k)
-            if np.isfinite(scores[i])
+            (self.ordered_ids[int(i)], float(masked[i]))
+            for i in _top_k_indices(masked, k)
+            if np.isfinite(masked[i])
         ]
 
     def _apply_restrict_mask(

@@ -64,9 +64,7 @@ def reciprocal_rank_fusion(
     counter = 0
     for ranking in rankings:
         for rank_index, doc_id in enumerate(ranking, start=1):
-            fused_score[doc_id] = (
-                fused_score.get(doc_id, 0.0) + 1.0 / (k_rrf + rank_index)
-            )
+            fused_score[doc_id] = fused_score.get(doc_id, 0.0) + 1.0 / (k_rrf + rank_index)
             if doc_id not in insertion_order:
                 insertion_order[doc_id] = counter
                 counter += 1

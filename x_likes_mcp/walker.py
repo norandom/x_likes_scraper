@@ -24,7 +24,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from openai import OpenAI
 
@@ -32,17 +32,17 @@ from .config import Config
 from .sanitize import fence_for_llm, sanitize_text
 from .tree import TweetTree
 
-
 # ---------------------------------------------------------------------------
 # Public dataclasses
+
 
 @dataclass(frozen=True)
 class WalkerHit:
     """One plausibly-relevant tweet, as judged by the walker LLM call."""
 
     tweet_id: str
-    relevance: float   # in [0, 1]
-    why: str           # short snippet from the model, truncated to ~240 chars
+    relevance: float  # in [0, 1]
+    why: str  # short snippet from the model, truncated to ~240 chars
 
 
 class WalkerError(RuntimeError):
@@ -78,13 +78,14 @@ _SYSTEM_PROMPT = (
     "Respond with a JSON object of the shape:\n"
     '  {"hits": [{"id": "<tweet_id>", "relevance": <float in [0,1]>, '
     '"why": "<short reason>"}, ...]}\n\n'
-    "If no tweets are plausibly relevant, return {\"hits\": []}. "
+    'If no tweets are plausibly relevant, return {"hits": []}. '
     "Do not include any prose outside the JSON object."
 )
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
+
 
 def _truncate(text: str, max_chars: int) -> str:
     """Return ``text`` collapsed onto one line and truncated to ``max_chars``."""
@@ -113,8 +114,7 @@ def _build_user_prompt(query: str, chunk: list[Any]) -> str:
         lines.append(f"[id={node.tweet_id}] @{safe_handle}: {fenced}")
     lines.append("")
     lines.append(
-        "Return only the plausibly-relevant tweets as JSON per the system "
-        "prompt's contract."
+        "Return only the plausibly-relevant tweets as JSON per the system prompt's contract."
     )
     return "\n".join(lines)
 
@@ -133,10 +133,14 @@ def _call_chat_completions(
 
     This helper is the test mock seam.
     """
+    # The openai SDK's ``messages`` param is typed as a union of TypedDicts;
+    # plain ``dict[str, str]`` works at runtime but mypy rejects the
+    # call-site shape. Cast to ``Any`` to keep our local type clean.
+    typed_messages = cast(Any, messages)
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=typed_messages,
             response_format={"type": "json_object"},
         )
     except Exception as exc:
@@ -146,12 +150,12 @@ def _call_chat_completions(
         if "response_format" in msg or "json_object" in msg:
             response = client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=typed_messages,
             )
         else:
             raise
 
-    content = response.choices[0].message.content
+    content: str | None = response.choices[0].message.content
     if content is None:
         return ""
     return content
@@ -253,7 +257,7 @@ def _entry_to_hit(
     if isinstance(raw_relevance, bool):
         # bool is a subclass of int; treat it as not-a-number for relevance.
         return None
-    if not isinstance(raw_relevance, (int, float)):
+    if not isinstance(raw_relevance, int | float):
         return None
     relevance = float(raw_relevance)
     if not math.isfinite(relevance):
@@ -272,9 +276,8 @@ def _entry_to_hit(
 # ---------------------------------------------------------------------------
 # Public entry point
 
-def _resolve_months(
-    tree: TweetTree, months_in_scope: list[str] | None
-) -> list[str]:
+
+def _resolve_months(tree: TweetTree, months_in_scope: list[str] | None) -> list[str]:
     """Return the months to walk, in caller-determined order.
 
     ``None`` means every month, ascending. A non-``None`` list keeps the
@@ -325,9 +328,7 @@ def _walk_chunk(
     except WalkerError:
         raise
     except Exception as exc:
-        raise WalkerError(
-            f"LLM call failed for month {month} chunk {chunk_index}: {exc}"
-        ) from exc
+        raise WalkerError(f"LLM call failed for month {month} chunk {chunk_index}: {exc}") from exc
 
     hits: list[WalkerHit] = []
     for entry in _coerce_hits(parsed):
@@ -377,6 +378,10 @@ def walk(
     # proxies often don't require auth (the config allows an empty key), but
     # the SDK constructor still demands *some* string.
     client = OpenAI(api_key=config.openai_api_key or "not-required")
+    # ``_assert_walker_configured`` (above) raised ``WalkerError`` if the
+    # model was unset; this assert pins the post-condition for mypy.
+    assert config.openai_model is not None
+    model = config.openai_model
     hits: list[WalkerHit] = []
 
     for month in months:
@@ -388,7 +393,7 @@ def walk(
             hits.extend(
                 _walk_chunk(
                     client,
-                    config.openai_model,
+                    model,
                     query,
                     chunk,
                     month,

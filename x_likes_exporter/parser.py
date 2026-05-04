@@ -12,19 +12,20 @@ and _extract_cursor with `self` removed. parse_response is a convenience wrapper
 that returns both extract_tweets and extract_cursor results in one call.
 """
 
-from typing import Any, Dict, List, Optional
+import contextlib
+from typing import Any
 
 from .models import Media, Tweet, User
 
 
-def extract_tweets(response: Dict[str, Any]) -> List[Tweet]:
+def extract_tweets(response: dict[str, Any]) -> list[Tweet]:
     """Extract tweets from an X Likes API response.
 
     Returns an empty list if the response is missing the expected
     `data.user.result.timeline` chain or any other structural key. Per-entry
     parse failures are skipped.
     """
-    tweets: List[Tweet] = []
+    tweets: list[Tweet] = []
 
     try:
         instructions = (
@@ -60,7 +61,7 @@ def extract_tweets(response: Dict[str, Any]) -> List[Tweet]:
     return tweets
 
 
-def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
+def parse_tweet(tweet_data: dict[str, Any]) -> Tweet | None:
     """Parse a single tweet entry's `result` dict into a Tweet model.
 
     Returns None on any failure (missing legacy/core, type errors). Per-tweet
@@ -83,7 +84,7 @@ def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
             profile_image_url=user_legacy.get("profile_image_url_https", ""),
             verified=user_legacy.get("verified", user_results.get("is_blue_verified", False)),
             followers_count=user_legacy.get("followers_count", 0),
-            following_count=user_legacy.get("friends_count", 0)
+            following_count=user_legacy.get("friends_count", 0),
         )
 
         # Parse media
@@ -95,7 +96,7 @@ def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
                 url=media_item.get("url", ""),
                 media_url=media_item.get("media_url_https", ""),
                 width=media_item.get("original_info", {}).get("width"),
-                height=media_item.get("original_info", {}).get("height")
+                height=media_item.get("original_info", {}).get("height"),
             )
             media_list.append(media)
 
@@ -124,16 +125,14 @@ def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
             mentions=mentions,
             conversation_id=legacy.get("conversation_id_str"),
             in_reply_to_user_id=legacy.get("in_reply_to_user_id_str"),
-            raw_data=tweet_data
+            raw_data=tweet_data,
         )
 
         views = tweet_data.get("views", {}).get("count")
         if views:
-            try:
+            # view counts are best-effort; leave default 0 if X returns garbage
+            with contextlib.suppress(ValueError, TypeError):
                 tweet.view_count = int(views)
-            except (ValueError, TypeError):
-                # view counts are best-effort; leave default 0 if X returns garbage
-                pass
 
         return tweet
 
@@ -142,7 +141,7 @@ def parse_tweet(tweet_data: Dict[str, Any]) -> Optional[Tweet]:
         return None
 
 
-def extract_cursor(response: Dict[str, Any]) -> Optional[str]:
+def extract_cursor(response: dict[str, Any]) -> str | None:
     """Extract the next-page cursor from an X Likes API response.
 
     Returns None if the response is malformed or no Bottom cursor entry is
@@ -164,8 +163,10 @@ def extract_cursor(response: Dict[str, Any]) -> Optional[str]:
 
                 for entry in entries:
                     content = entry.get("content", {})
-                    if (content.get("entryType") == "TimelineTimelineCursor" and
-                            content.get("cursorType") == "Bottom"):
+                    if (
+                        content.get("entryType") == "TimelineTimelineCursor"
+                        and content.get("cursorType") == "Bottom"
+                    ):
                         return content.get("value")
 
     except Exception as e:
@@ -174,7 +175,7 @@ def extract_cursor(response: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def parse_response(response: Dict[str, Any]) -> tuple[List[Tweet], Optional[str]]:
+def parse_response(response: dict[str, Any]) -> tuple[list[Tweet], str | None]:
     """Convenience: extract_tweets and extract_cursor in one call.
 
     Returns (tweets, next_cursor). Both extract_tweets and extract_cursor are

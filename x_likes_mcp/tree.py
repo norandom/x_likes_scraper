@@ -35,15 +35,16 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Public dataclasses
 
+
 @dataclass(frozen=True)
 class TreeNode:
     """One liked tweet parsed out of a per-month Markdown file."""
 
-    year_month: str       # "2026-04"
-    tweet_id: str         # extracted from the canonical "View on X" link
-    handle: str           # screen_name without the leading "@"
-    text: str             # section body minus the heading and the link line
-    raw_section: str      # full section text including the heading
+    year_month: str  # "2026-04"
+    tweet_id: str  # extracted from the canonical "View on X" link
+    handle: str  # screen_name without the leading "@"
+    text: str  # section body minus the heading and the link line
+    raw_section: str  # full section text including the heading
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class TweetTree:
     """In-memory tree of all parsed liked tweets."""
 
     nodes_by_month: dict[str, list[TreeNode]]
-    nodes_by_id:    dict[str, TreeNode]
+    nodes_by_id: dict[str, TreeNode]
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +63,7 @@ _FILENAME_RE = re.compile(r"^likes_(\d{4}-\d{2})\.md$")
 # The canonical link line. We accept both x.com and twitter.com just in case,
 # and tolerate an empty handle path component (the exporter occasionally
 # emits ``https://x.com//status/{id}`` for tweets whose handle was stripped).
-_TWEET_URL_RE = re.compile(
-    r"https?://(?:x|twitter)\.com/([^/\s)]*)/status/(\d+)"
-)
+_TWEET_URL_RE = re.compile(r"https?://(?:x|twitter)\.com/([^/\s)]*)/status/(\d+)")
 
 # Heading forms emitted by MarkdownFormatter._format_tweet:
 #   ### [@handle](https://x.com/handle)
@@ -78,6 +77,7 @@ _VIEW_ON_X_LINE_RE = re.compile(r"^\s*🔗\s*\[View on X\]\(.*\)\s*$")
 
 # ---------------------------------------------------------------------------
 # Section splitter
+
 
 def _split_sections(content: str) -> list[str]:
     """Split file content into per-tweet ``### ...`` sections.
@@ -121,6 +121,7 @@ def _strip_heading_and_link(section: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Public entry point
+
 
 def build_tree(by_month_dir: Path) -> TweetTree:
     """Parse every ``likes_YYYY-MM.md`` under ``by_month_dir`` into a :class:`TweetTree`.

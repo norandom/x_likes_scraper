@@ -20,7 +20,6 @@ private formatter state. All file writes are scoped to ``tmp_path``.
 from __future__ import annotations
 
 import json
-from typing import List
 
 import pandas as pd
 import pytest
@@ -35,7 +34,7 @@ from x_likes_exporter.models import Media, Tweet, User
 
 
 @pytest.fixture
-def sample_tweets() -> List[Tweet]:
+def sample_tweets() -> list[Tweet]:
     """Return three hand-built tweets covering the documented edge cases.
 
     The trio is intentionally small so each assertion below can name the
@@ -311,7 +310,7 @@ def test_pandas_formatter_dataframe(sample_tweets) -> None:
 
 
 def test_markdown_formatter_global_header_default_present(
-    sample_tweets: List[Tweet], tmp_path
+    sample_tweets: list[Tweet], tmp_path
 ) -> None:
     """Default args still emit the file-level h1 + export metadata block.
 
@@ -330,9 +329,7 @@ def test_markdown_formatter_global_header_default_present(
     assert "**Total Tweets:**" in body
 
 
-def test_markdown_formatter_omit_global_header(
-    sample_tweets: List[Tweet], tmp_path
-) -> None:
+def test_markdown_formatter_omit_global_header(sample_tweets: list[Tweet], tmp_path) -> None:
     """``omit_global_header=True`` strips boilerplate; per-month + per-tweet content stays.
 
     The MCP indexer (mcp-pageindex spec) drives this branch: per-month

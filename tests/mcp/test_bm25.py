@@ -26,7 +26,6 @@ import pytest
 from x_likes_mcp import bm25 as bm25_mod
 from x_likes_mcp.bm25 import DEFAULT_TOP_K, BM25Index, tokenize
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 
@@ -237,9 +236,7 @@ def test_top_k_restrict_returns_only_restricted() -> None:
     text_by_id = {f"id_{i}": "alpha beta" for i in range(10)}
     index = BM25Index.build(_corpus(text_by_id))
 
-    result = index.top_k(
-        "alpha", k=200, restrict_to_ids={"id_2", "id_8"}
-    )
+    result = index.top_k("alpha", k=200, restrict_to_ids={"id_2", "id_8"})
 
     returned_ids = {tid for tid, _ in result}
     assert returned_ids.issubset({"id_2", "id_8"})
@@ -260,9 +257,7 @@ def test_top_k_restrict_smaller_than_k_returns_all() -> None:
 def test_top_k_empty_restrict_returns_empty() -> None:
     """``restrict_to_ids=set()`` is "no candidates allowed" -> ``[]``."""
 
-    index = BM25Index.build(
-        _corpus({"id_1": "alpha beta", "id_2": "alpha gamma"})
-    )
+    index = BM25Index.build(_corpus({"id_1": "alpha beta", "id_2": "alpha gamma"}))
 
     result = index.top_k("alpha", k=10, restrict_to_ids=set())
 
@@ -272,13 +267,9 @@ def test_top_k_empty_restrict_returns_empty() -> None:
 def test_top_k_no_overlap_returns_empty() -> None:
     """``restrict_to_ids`` containing only non-corpus ids yields ``[]``."""
 
-    index = BM25Index.build(
-        _corpus({"id_1": "alpha beta", "id_2": "alpha gamma"})
-    )
+    index = BM25Index.build(_corpus({"id_1": "alpha beta", "id_2": "alpha gamma"}))
 
-    result = index.top_k(
-        "alpha", k=10, restrict_to_ids={"missing_a", "missing_b"}
-    )
+    result = index.top_k("alpha", k=10, restrict_to_ids={"missing_a", "missing_b"})
 
     assert result == []
 

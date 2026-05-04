@@ -38,7 +38,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 # Matches ANSI / VT escape sequences. Covers CSI ("ESC ["), OSC ("ESC ]"),
 # and standalone ESC + final byte. The character class on the inside is
 # permissive on purpose — we drop everything between the introducer and
@@ -59,9 +58,7 @@ _ANSI_RE = re.compile(
 # C0 (0x00-0x1F) and C1 (0x7F-0x9F) controls we never want in output.
 # Newline and tab are kept; everything else in those ranges is stripped.
 _CONTROL_CHARS = "".join(
-    chr(c)
-    for c in range(0x00, 0xA0)
-    if c not in (0x09, 0x0A) and not (0x20 <= c < 0x7F)
+    chr(c) for c in range(0xA0) if c not in (0x09, 0x0A) and not (0x20 <= c < 0x7F)
 )
 _CONTROL_RE = re.compile(f"[{re.escape(_CONTROL_CHARS)}]")
 
@@ -78,11 +75,11 @@ _CONTROL_RE = re.compile(f"[{re.escape(_CONTROL_CHARS)}]")
 #   U+2066 LRI,  U+2067 RLI,  U+2068 FSI,  U+2069 PDI
 #   U+FEFF BOM
 _FORMAT_CODEPOINTS = (
-    list(range(0x200B, 0x2010))     # ZWSP/ZWNJ/ZWJ/LRM/RLM
-    + list(range(0x202A, 0x202F))   # LRE/RLE/PDF/LRO/RLO
-    + [0x2060]                      # WORD JOINER
-    + list(range(0x2066, 0x206A))   # LRI/RLI/FSI/PDI
-    + [0xFEFF]                      # BOM
+    list(range(0x200B, 0x2010))  # ZWSP/ZWNJ/ZWJ/LRM/RLM
+    + list(range(0x202A, 0x202F))  # LRE/RLE/PDF/LRO/RLO
+    + [0x2060]  # WORD JOINER
+    + list(range(0x2066, 0x206A))  # LRI/RLI/FSI/PDI
+    + [0xFEFF]  # BOM
 )
 _FORMAT_CHARS = "".join(chr(cp) for cp in _FORMAT_CODEPOINTS)
 _FORMAT_RE = re.compile(f"[{re.escape(_FORMAT_CHARS)}]")
@@ -152,7 +149,7 @@ def safe_http_url(url: object) -> str | None:
     if not cleaned:
         return None
     lower = cleaned.lower()
-    if lower.startswith("http://") or lower.startswith("https://"):
+    if lower.startswith(("http://", "https://")):
         return cleaned
     return None
 

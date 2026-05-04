@@ -28,7 +28,6 @@ import pytest
 
 from x_likes_exporter.loader import iter_monthly_markdown, load_export
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "likes_export.json"
 
 

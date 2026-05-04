@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from x_likes_exporter.models import Tweet
 
 
-def tweet_index_text(tweet: "Tweet") -> str:
+def tweet_index_text(tweet: Tweet) -> str:
     """Return the text that BM25 and the embedder should both index.
 
     The format is the tweet's text followed by each resolved URL,

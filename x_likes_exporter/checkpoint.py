@@ -4,9 +4,10 @@ Checkpoint system for resuming interrupted exports
 
 import json
 import pickle
-from pathlib import Path
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 from .models import Tweet
 
 
@@ -28,10 +29,10 @@ class Checkpoint:
     def save(
         self,
         user_id: str,
-        tweets: List[Tweet],
-        cursor: Optional[str],
+        tweets: list[Tweet],
+        cursor: str | None,
         total_fetched: int,
-        download_media: bool = True
+        download_media: bool = True,
     ):
         """
         Save current export state
@@ -50,10 +51,10 @@ class Checkpoint:
             "total_fetched": total_fetched,
             "download_media": download_media,
             "timestamp": datetime.now().isoformat(),
-            "version": "1.0"
+            "version": "1.0",
         }
 
-        with open(self.checkpoint_file, 'w', encoding='utf-8') as f:
+        with open(self.checkpoint_file, "w", encoding="utf-8") as f:
             json.dump(checkpoint_data, f, indent=2)
 
         # pickle is faster than re-serializing Tweet objects to JSON each save.
@@ -61,12 +62,12 @@ class Checkpoint:
         # under output/ on the same machine that loads it. Single-user, no
         # network exposure, no untrusted producer; deserialization risk is
         # bounded to whatever the user puts in their own output directory.
-        with open(self.tweets_file, 'wb') as f:
+        with open(self.tweets_file, "wb") as f:
             pickle.dump(tweets, f)  # nosem: avoid-pickle
 
         print(f"✓ Checkpoint saved: {total_fetched} tweets")
 
-    def load(self) -> Optional[Dict[str, Any]]:
+    def load(self) -> dict[str, Any] | None:
         """
         Load checkpoint if exists
 
@@ -78,17 +79,17 @@ class Checkpoint:
 
         try:
             # Load checkpoint metadata
-            with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
+            with open(self.checkpoint_file, encoding="utf-8") as f:
                 checkpoint_data = json.load(f)
 
             # Load tweets. See save() for the trust-boundary rationale that
             # makes pickle here acceptable (single-user, local-only file).
             if self.tweets_file.exists():
-                with open(self.tweets_file, 'rb') as f:
+                with open(self.tweets_file, "rb") as f:
                     tweets = pickle.load(f)  # nosem: avoid-pickle
-                checkpoint_data['tweets'] = tweets
+                checkpoint_data["tweets"] = tweets
             else:
-                checkpoint_data['tweets'] = []
+                checkpoint_data["tweets"] = []
 
             return checkpoint_data
 
@@ -108,7 +109,7 @@ class Checkpoint:
             self.tweets_file.unlink()
         print("✓ Checkpoint cleared")
 
-    def get_info(self) -> Optional[Dict[str, Any]]:
+    def get_info(self) -> dict[str, Any] | None:
         """
         Get checkpoint information without loading tweets
 
@@ -119,7 +120,7 @@ class Checkpoint:
             return None
 
         try:
-            with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
+            with open(self.checkpoint_file, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             print(f"Warning: Could not read checkpoint: {e}")
@@ -139,7 +140,7 @@ class Checkpoint:
         if not info:
             return False
 
-        return info.get('user_id') == user_id
+        return info.get("user_id") == user_id
 
     def get_progress(self) -> str:
         """
@@ -152,8 +153,8 @@ class Checkpoint:
         if not info:
             return "No checkpoint found"
 
-        timestamp = info.get('timestamp', 'unknown')
-        total = info.get('total_fetched', 0)
-        user_id = info.get('user_id', 'unknown')
+        timestamp = info.get("timestamp", "unknown")
+        total = info.get("total_fetched", 0)
+        user_id = info.get("user_id", "unknown")
 
         return f"User {user_id}: {total} tweets (saved at {timestamp})"

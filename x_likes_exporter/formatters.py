@@ -3,20 +3,21 @@ Export formatters for different output formats (JSON, Pandas, Markdown)
 """
 
 import json
-import pandas as pd
-from pathlib import Path
-from typing import List
 from datetime import datetime
-from .models import Tweet
-from .downloader import MediaDownloader
+from pathlib import Path
+
+import pandas as pd
+
 from .dates import parse_x_datetime
+from .downloader import MediaDownloader
+from .models import Tweet
 
 
 class JSONFormatter:
     """Export tweets to JSON format"""
 
     @staticmethod
-    def export(tweets: List[Tweet], output_file: str, include_raw: bool = False):
+    def export(tweets: list[Tweet], output_file: str, include_raw: bool = False):
         """
         Export tweets to JSON file
 
@@ -27,7 +28,7 @@ class JSONFormatter:
         """
         data = [tweet.to_dict(include_raw=include_raw) for tweet in tweets]
 
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
         print(f"Exported {len(tweets)} tweets to {output_file}")
@@ -37,7 +38,7 @@ class PandasFormatter:
     """Export tweets to Pandas DataFrame"""
 
     @staticmethod
-    def to_dataframe(tweets: List[Tweet]) -> pd.DataFrame:
+    def to_dataframe(tweets: list[Tweet]) -> pd.DataFrame:
         """
         Convert tweets to Pandas DataFrame
 
@@ -51,29 +52,29 @@ class PandasFormatter:
 
         for tweet in tweets:
             row = {
-                'tweet_id': tweet.id,
-                'text': tweet.text,
-                'created_at': tweet.created_at,
-                'user_id': tweet.user.id,
-                'user_screen_name': tweet.user.screen_name,
-                'user_name': tweet.user.name,
-                'user_verified': tweet.user.verified,
-                'retweet_count': tweet.retweet_count,
-                'favorite_count': tweet.favorite_count,
-                'reply_count': tweet.reply_count,
-                'quote_count': tweet.quote_count,
-                'view_count': tweet.view_count,
-                'lang': tweet.lang,
-                'is_retweet': tweet.is_retweet,
-                'is_quote': tweet.is_quote,
-                'has_media': len(tweet.media) > 0,
-                'media_count': len(tweet.media),
-                'media_types': ','.join([m.type for m in tweet.media]),
-                'url_count': len(tweet.urls),
-                'hashtag_count': len(tweet.hashtags),
-                'hashtags': ','.join(tweet.hashtags),
-                'mention_count': len(tweet.mentions),
-                'tweet_url': tweet.get_url(),
+                "tweet_id": tweet.id,
+                "text": tweet.text,
+                "created_at": tweet.created_at,
+                "user_id": tweet.user.id,
+                "user_screen_name": tweet.user.screen_name,
+                "user_name": tweet.user.name,
+                "user_verified": tweet.user.verified,
+                "retweet_count": tweet.retweet_count,
+                "favorite_count": tweet.favorite_count,
+                "reply_count": tweet.reply_count,
+                "quote_count": tweet.quote_count,
+                "view_count": tweet.view_count,
+                "lang": tweet.lang,
+                "is_retweet": tweet.is_retweet,
+                "is_quote": tweet.is_quote,
+                "has_media": len(tweet.media) > 0,
+                "media_count": len(tweet.media),
+                "media_types": ",".join([m.type for m in tweet.media]),
+                "url_count": len(tweet.urls),
+                "hashtag_count": len(tweet.hashtags),
+                "hashtags": ",".join(tweet.hashtags),
+                "mention_count": len(tweet.mentions),
+                "tweet_url": tweet.get_url(),
             }
 
             data.append(row)
@@ -81,12 +82,12 @@ class PandasFormatter:
         df = pd.DataFrame(data)
 
         # Convert created_at to datetime
-        df['created_at'] = pd.to_datetime(df['created_at'])
+        df["created_at"] = pd.to_datetime(df["created_at"])
 
         return df
 
     @staticmethod
-    def export(tweets: List[Tweet], output_file: str, format: str = 'csv'):
+    def export(tweets: list[Tweet], output_file: str, format: str = "csv"):
         """
         Export tweets to file using Pandas
 
@@ -97,11 +98,11 @@ class PandasFormatter:
         """
         df = PandasFormatter.to_dataframe(tweets)
 
-        if format == 'csv':
-            df.to_csv(output_file, index=False, encoding='utf-8')
-        elif format == 'excel':
-            df.to_excel(output_file, index=False, engine='openpyxl')
-        elif format == 'parquet':
+        if format == "csv":
+            df.to_csv(output_file, index=False, encoding="utf-8")
+        elif format == "excel":
+            df.to_excel(output_file, index=False, engine="openpyxl")
+        elif format == "parquet":
             df.to_parquet(output_file, index=False)
         else:
             raise ValueError(f"Unsupported format: {format}")
@@ -123,7 +124,7 @@ class MarkdownFormatter:
 
     def export(
         self,
-        tweets: List[Tweet],
+        tweets: list[Tweet],
         output_file: str,
         include_media: bool = True,
         *,
@@ -158,9 +159,9 @@ class MarkdownFormatter:
         for tweet in tweets:
             created = parse_x_datetime(tweet.created_at)
             if created is None:
-                month_key = 'unknown'
+                month_key = "unknown"
             else:
-                month_key = created.strftime('%Y-%m')
+                month_key = created.strftime("%Y-%m")
             if month_key not in tweets_by_month:
                 tweets_by_month[month_key] = []
             tweets_by_month[month_key].append(tweet)
@@ -172,7 +173,7 @@ class MarkdownFormatter:
         for month in sorted_months:
             month_tweets = tweets_by_month[month]
 
-            if month != 'unknown':
+            if month != "unknown":
                 md_lines.append(f"\n## {month} ({len(month_tweets)} tweets)\n")
             else:
                 md_lines.append(f"\n## Unknown Date ({len(month_tweets)} tweets)\n")
@@ -181,12 +182,12 @@ class MarkdownFormatter:
                 md_lines.extend(self._format_tweet(tweet, output_path, include_media))
 
         # Write to file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(md_lines))
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(md_lines))
 
         print(f"Exported {len(tweets)} tweets to {output_file}")
 
-    def _format_tweet(self, tweet: Tweet, output_path: Path, include_media: bool) -> List[str]:
+    def _format_tweet(self, tweet: Tweet, output_path: Path, include_media: bool) -> list[str]:
         """Format a single tweet as markdown"""
         lines = []
 
@@ -198,7 +199,7 @@ class MarkdownFormatter:
         if created is None:
             date_str = tweet.created_at
         else:
-            date_str = created.strftime('%Y-%m-%d %H:%M:%S')
+            date_str = created.strftime("%Y-%m-%d %H:%M:%S")
 
         lines.append(f"*{date_str}*")
 
@@ -213,8 +214,7 @@ class MarkdownFormatter:
                 if media.local_path and self.media_downloader:
                     # Get relative path from markdown file to media
                     rel_path = self.media_downloader.get_relative_path(
-                        media.local_path,
-                        output_path.parent
+                        media.local_path, output_path.parent
                     )
 
                     if media.type == "photo":
@@ -260,7 +260,7 @@ class MarkdownFormatter:
 class HTMLFormatter:
     """Export tweets to a single HTML page."""
 
-    def export(self, tweets: List[Tweet], output_file: str):
+    def export(self, tweets: list[Tweet], output_file: str):
         """
         Export tweets to HTML file
 
@@ -275,14 +275,18 @@ class HTMLFormatter:
         html_lines.append("<html lang='en'>")
         html_lines.append("<head>")
         html_lines.append("    <meta charset='UTF-8'>")
-        html_lines.append("    <meta name='viewport' content='width=device-width, initial-scale=1.0'>")
+        html_lines.append(
+            "    <meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+        )
         html_lines.append("    <title>X Liked Tweets</title>")
         html_lines.append(self._get_css())
         html_lines.append("</head>")
         html_lines.append("<body>")
         html_lines.append("    <div class='container'>")
-        html_lines.append(f"        <h1>X (Twitter) Liked Tweets</h1>")
-        html_lines.append(f"        <p class='meta'>Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Total: {len(tweets)} tweets</p>")
+        html_lines.append("        <h1>X (Twitter) Liked Tweets</h1>")
+        html_lines.append(
+            f"        <p class='meta'>Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Total: {len(tweets)} tweets</p>"
+        )
 
         # Tweets
         for tweet in tweets:
@@ -294,8 +298,8 @@ class HTMLFormatter:
         html_lines.append("</html>")
 
         # Write to file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(html_lines))
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(html_lines))
 
         print(f"Exported {len(tweets)} tweets to {output_file}")
 
@@ -304,9 +308,9 @@ class HTMLFormatter:
         html = []
 
         html.append("        <div class='tweet'>")
-        html.append(f"            <div class='user'>")
+        html.append("            <div class='user'>")
         html.append(f"                <strong>{tweet.user.name}</strong> @{tweet.user.screen_name}")
-        html.append(f"            </div>")
+        html.append("            </div>")
         html.append(f"            <div class='text'>{self._escape_html(tweet.text)}</div>")
 
         # Media
@@ -315,30 +319,33 @@ class HTMLFormatter:
             for media in tweet.media:
                 if media.local_path:
                     if media.type == "photo":
-                        html.append(f"                <img src='{media.local_path}' alt='Tweet image'>")
+                        html.append(
+                            f"                <img src='{media.local_path}' alt='Tweet image'>"
+                        )
                 elif media.media_url:
                     html.append(f"                <img src='{media.media_url}' alt='Tweet image'>")
             html.append("            </div>")
 
         # Stats
-        html.append(f"            <div class='stats'>")
+        html.append("            <div class='stats'>")
         html.append(f"                <span>🔄 {tweet.retweet_count}</span>")
         html.append(f"                <span>❤️ {tweet.favorite_count}</span>")
         html.append(f"                <span>💬 {tweet.reply_count}</span>")
         html.append(f"                <a href='{tweet.get_url()}' target='_blank'>View on X</a>")
-        html.append(f"            </div>")
+        html.append("            </div>")
         html.append("        </div>")
 
-        return '\n'.join(html)
+        return "\n".join(html)
 
     def _escape_html(self, text: str) -> str:
         """Escape HTML special characters"""
-        return (text
-                .replace('&', '&amp;')
-                .replace('<', '&lt;')
-                .replace('>', '&gt;')
-                .replace('"', '&quot;')
-                .replace("'", '&#39;'))
+        return (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+        )
 
     def _get_css(self) -> str:
         """Get CSS styles for HTML export"""
