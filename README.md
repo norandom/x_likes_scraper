@@ -117,7 +117,7 @@ The hybrid retrieval pipeline (BM25 lexical + dense via OpenRouter, fused with R
 
 The MCP server exposes four tools:
 
-- `search_likes(query, year, month_start, month_end, with_why)` — natural-language search. The default path runs hybrid recall (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion) over the entire corpus, then re-ranks with the heavy ranker. No chat-completions call on the default path; one OpenRouter `/v1/embeddings` request per query. The optional date filter narrows the candidate set. Pass `with_why=true` to opt into a single walker chat-completions call that populates the `why` field on the top-20 results.
+- `search_likes(query, year, month_start, month_end, with_why)` — natural-language search. The default path runs hybrid recall (BM25 lexical + dense via OpenRouter, fused with Reciprocal Rank Fusion) over the entire corpus, then re-ranks with the heavy ranker. No chat-completions call on the default path; one OpenRouter `/v1/embeddings` request per query. The optional date filter narrows the candidate set. Pass `with_why=true` to opt into a single walker chat-completions call that populates the `why` field on the top-20 results. Each hit also carries a `tweet_url` (canonical `https://x.com/{handle}/status/{id}`, built on the server — the handle is checked against Twitter's format and falls back to the `i/status` form when it doesn't match) and a `urls` list of resolved HTTP(S) destinations from the tweet body. Every entry in `urls` is wrapped in `<<<URL>>> ... <<<END_URL>>>` so a calling LLM can be told to read fenced content as a URL string, not instructions.
 - `list_months()` — months for which per-month Markdown exists, reverse-chronologically.
 - `get_month(year_month)` — raw Markdown for one month.
 - `read_tweet(tweet_id)` — one tweet's metadata by id.
@@ -144,9 +144,26 @@ uv run x-likes-mcp --search "system design" --with-why --limit 5
 uv run x-likes-mcp --search "graph databases" --json | jq '.tweet_id'
 ```
 
-Each hit prints as two lines: a metadata header (score, walker relevance, year-month, handle, tweet id), then the snippet. The snippet has `t.co` shortlinks stripped and the resolved URLs appended after the prose. If you ran `./scrape.sh` with media downloads enabled, the printer also lists each downloaded media file as a `file://` link, which iTerm2, Kitty, Wezterm, and VS Code open on click.
+Each hit prints as a small block: the metadata header (score, walker relevance, year-month, handle, tweet id), the canonical `https://x.com/...` link to the tweet, then the snippet. The snippet has `t.co` shortlinks stripped and the resolved URLs appended after the prose. If `./scrape.sh` ran with media downloads enabled, the printer also lists each downloaded media file as a `file://` link. iTerm2, Kitty, Wezterm, and VS Code make those clickable.
+
+```
+ 1. score=56.12 │ wr=0.54 │ 2026-05 │ @tom_doerr │ id=2050120307399147786
+    https://x.com/tom_doerr/status/2050120307399147786
+    AI vibe investing agent for financial markets  https://github.com/ginlix-ai/LangAlpha
+    media: file:///path/to/output/media/2050120307399147786_0.jpg
+```
 
 First invocation embeds the whole corpus (30-90 seconds with the default model). Every later run hits the on-disk cache and starts in under a second.
+
+### Defenses against malicious tweet content
+
+Tweets in `likes.json` carry text written by arbitrary X users, so the search path doesn't trust them.
+
+Snippet, handle, and display name all go through `sanitize_text` before leaving the index. That strips ANSI escape sequences, C0/C1 controls (newline and tab survive), Unicode bidirectional overrides in U+202A-U+202E and U+2066-U+2069, zero-width joiners, and the BOM. Text is NFKC-normalized first so visually identical confusables collapse to a canonical form. The result is round-tripped through UTF-8 with `errors="replace"` so a stray surrogate cannot crash whoever consumes the response.
+
+The walker explainer (`with_why=true`) wraps each tweet body in `<<<TWEET_BODY>>> ... <<<END_TWEET_BODY>>>`, and the system prompt tells the model that fenced content is data, not instructions. If a tweet body contains either marker, or the URL fence markers, the markers are replaced with `[FENCE]` before fencing. A crafted tweet cannot close the fence early and resume control of the prompt.
+
+Resolved URLs in `tweet.urls` get the same treatment. A long path or query string can carry prompt-injection prose like `?q=ignore+previous+instructions`, so each URL is filtered to HTTP(S), sanitized, and wrapped in `<<<URL>>> ... <<<END_URL>>>`. URLs are never re-resolved at query time. We trust whatever the export already pulled from Twitter's API, not anything reachable on the network.
 
 ### Prerequisites
 
@@ -635,6 +652,37 @@ Rough time-to-finish, including rate-limit waits:
 ## Privacy and security
 
 Everything runs locally. The script reads your `cookies.json`, talks to X's API directly using your existing session, and writes files to disk. Nothing is sent to a third-party server. The source is here, so you can read it yourself before running it.
+
+## Development
+
+Tests, lint, and types run via `uv`:
+
+```bash
+# Install dev dependencies (ruff, mypy, pre-commit, pytest, types-*).
+uv sync --group dev
+
+# Tests.
+uv run pytest
+
+# Lint + format. Ruff config lives in pyproject.toml under [tool.ruff].
+uv run ruff check .
+uv run ruff format .
+
+# Types. Scope is `x_likes_mcp/` only. Config under [tool.mypy].
+uv run mypy
+```
+
+Pre-commit wires the same ruff and mypy invocations plus a few hygiene hooks (trailing whitespace, EOF newline, large-file guard, merge-conflict marker, private-key detection). They run on every commit.
+
+```bash
+# One-time per checkout.
+uv run pre-commit install
+
+# Run the full set on demand, e.g. before a PR.
+uv run pre-commit run --all-files
+```
+
+The mypy hook is local. It calls `uv run --no-sync mypy` so it shares the project's resolved environment instead of installing its own copy. `.kiro/`, `.claude/`, `output/`, `examples/`, and the `static_analysis_*` directories are excluded from every hook.
 
 ## License
 
