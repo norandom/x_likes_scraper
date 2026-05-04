@@ -112,7 +112,7 @@
   - _Boundary: context_
   - _Depends: 1.3, 2.3, 3.1_
 
-- [ ] 4.2 Implement the crawl4ai HTTP fetcher with SSRF, redirect, content-type, and cache discipline
+- [x] 4.2 Implement the crawl4ai HTTP fetcher with SSRF, redirect, content-type, and cache discipline
   - Probe the configured crawl4ai endpoint at startup when fetching is enabled and surface a `ContainerUnreachable` error that names the endpoint and its env-var override
   - Per URL: SSRF-validate the host, POST to the documented crawl4ai endpoint with `follow_redirects=False`, manually walk up to three redirect hops while re-validating each new host (with the same allowlist), enforce the 5-second timeout, drop URLs whose declared content type is not in the allowlist (text/html, text/plain, application/json, application/pdf), take the `markdown` field from the JSON response, sanitize it, truncate to the configured per-URL byte cap, and persist the post-sanitize body through the cache
   - Treat any per-URL skip (timeout, blocked IP, bad content type, 5xx, oversize body) as a soft drop that returns no result for that URL while the rest of the run continues
