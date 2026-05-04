@@ -784,6 +784,7 @@ def test_search_likes_shapes_results_with_documented_keys() -> None:
         "year_month",
         "handle",
         "snippet",
+        "urls",
         "score",
         "walker_relevance",
         "why",

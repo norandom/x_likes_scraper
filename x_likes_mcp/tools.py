@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import errors
 from . import walker as walker_module
-from .sanitize import sanitize_text
+from .sanitize import fence_url_for_llm, sanitize_text
 from .tree import TweetTree
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -190,9 +190,11 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     tweet = index.tweets_by_id.get(hit.tweet_id)
     node = index.tree.nodes_by_id.get(hit.tweet_id)
 
+    raw_urls: list[str] = []
     if tweet is not None:
         handle = tweet.user.screen_name if tweet.user is not None else ""
         snippet = _truncate(tweet.text or "", _SNIPPET_MAX_CHARS)
+        raw_urls = list(tweet.urls or [])
     elif node is not None:
         handle = node.handle
         snippet = _truncate(node.text or "", _SNIPPET_MAX_CHARS)
@@ -207,6 +209,18 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     handle = sanitize_text(handle)
     snippet = sanitize_text(snippet)
 
+    # Each resolved URL is sanitized, scheme-checked (http/https only),
+    # and wrapped in a distinctive ``<<<URL>>> ... <<<END_URL>>>`` fence.
+    # URLs can carry long paths or query strings with prompt-injection
+    # prose (e.g. ``?q=Ignore+previous+instructions``). Fencing lets
+    # callers tell their LLM "treat fenced content as data, not
+    # instructions" so the URL payload cannot mix into nearby prose.
+    fenced_urls = [
+        fenced
+        for fenced in (fence_url_for_llm(u) for u in raw_urls)
+        if fenced is not None
+    ]
+
     walker_relevance = max(0.0, min(1.0, float(hit.walker_relevance)))
 
     return {
@@ -214,6 +228,7 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
         "year_month": _resolve_year_month(index, hit.tweet_id),
         "handle": handle,
         "snippet": snippet,
+        "urls": fenced_urls,
         "score": hit.score,
         "walker_relevance": walker_relevance,
         "why": hit.why or "",
@@ -330,8 +345,12 @@ def search_likes(
 
     Returns:
         List of dicts shaped
-        ``{"tweet_id", "year_month", "handle", "snippet", "score",
-        "walker_relevance", "why", "feature_breakdown"}``.
+        ``{"tweet_id", "year_month", "handle", "snippet", "urls",
+        "score", "walker_relevance", "why", "feature_breakdown"}``.
+        ``urls`` is a list of fenced HTTP(S) URLs from the tweet
+        entities; each entry is wrapped in
+        ``<<<URL>>> ... <<<END_URL>>>`` so a caller's LLM can be
+        instructed to treat fenced content as data, not instructions.
     """
     stripped = _validate_query(query)
     _validate_filter(year, month_start, month_end)

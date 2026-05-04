@@ -88,13 +88,23 @@ _FORMAT_CHARS = "".join(chr(cp) for cp in _FORMAT_CODEPOINTS)
 _FORMAT_RE = re.compile(f"[{re.escape(_FORMAT_CHARS)}]")
 
 
-# Fence used by :func:`fence_for_llm`. The marker is intentionally
-# distinctive so a model can be instructed to never treat its content
-# as instructions. Any occurrence of either marker inside the body is
-# replaced with the neutral token below before fencing.
+# Fences used by :func:`fence_for_llm` and :func:`fence_url_for_llm`.
+# The markers are intentionally distinctive so a model can be told to
+# never treat fenced content as instructions. Any occurrence of any
+# marker inside a fenced body is replaced with the neutral token below
+# before fencing, so a crafted tweet cannot prematurely close one fence
+# and reopen prompt control.
 LLM_FENCE_OPEN = "<<<TWEET_BODY>>>"
 LLM_FENCE_CLOSE = "<<<END_TWEET_BODY>>>"
+URL_FENCE_OPEN = "<<<URL>>>"
+URL_FENCE_CLOSE = "<<<END_URL>>>"
 _FENCE_NEUTRAL = "[FENCE]"
+_ALL_FENCES = (
+    LLM_FENCE_OPEN,
+    LLM_FENCE_CLOSE,
+    URL_FENCE_OPEN,
+    URL_FENCE_CLOSE,
+)
 
 
 def sanitize_text(text: object) -> str:
@@ -147,20 +157,52 @@ def safe_http_url(url: object) -> str | None:
     return None
 
 
+def _neutralize_fence_markers(body: str) -> str:
+    """Replace every fence marker that appears inside ``body``."""
+
+    out = body
+    for marker in _ALL_FENCES:
+        out = out.replace(marker, _FENCE_NEUTRAL)
+    return out
+
+
 def fence_for_llm(body: str) -> str:
     """Wrap ``body`` in :data:`LLM_FENCE_OPEN` / :data:`LLM_FENCE_CLOSE`.
 
     The body is sanitized first (so the LLM never sees ANSI / BiDi / BOM
-    junk in its prompt). Any occurrence of either fence marker inside
-    the resulting body is replaced with :data:`_FENCE_NEUTRAL` so a
-    crafted tweet cannot prematurely close the fence and resume control
-    of the prompt.
+    junk in its prompt). Any occurrence of any fence marker inside the
+    resulting body is replaced with :data:`_FENCE_NEUTRAL` so a crafted
+    tweet cannot prematurely close one fence and resume control of the
+    prompt.
 
     The caller is responsible for telling the model (in the system
     prompt) that text inside the fence is data, not instructions.
     """
 
-    sanitized = sanitize_text(body)
-    sanitized = sanitized.replace(LLM_FENCE_OPEN, _FENCE_NEUTRAL)
-    sanitized = sanitized.replace(LLM_FENCE_CLOSE, _FENCE_NEUTRAL)
+    sanitized = _neutralize_fence_markers(sanitize_text(body))
     return f"{LLM_FENCE_OPEN}\n{sanitized}\n{LLM_FENCE_CLOSE}"
+
+
+def fence_url_for_llm(url: object) -> str | None:
+    """Wrap a sanitized HTTP(S) URL in :data:`URL_FENCE_OPEN` / :data:`URL_FENCE_CLOSE`.
+
+    Pipeline:
+      1. ``safe_http_url`` — sanitize, NFKC, strip ANSI/control/BiDi,
+         drop the URL when it does not match ``http://`` / ``https://``.
+      2. Neutralize any fence markers that survived inside the URL.
+      3. Wrap with the URL fence on a single line.
+
+    Returns ``None`` when the URL is unsafe or non-HTTP(S). Callers that
+    receive ``None`` should drop the URL rather than emit a stub fence.
+
+    A URL with a long path or query string can carry prompt-injection
+    prose (e.g. ``?q=Ignore+previous+instructions``). Wrapping the URL
+    in a distinctive fence and instructing the model to treat fenced
+    content as data — not instructions — keeps that payload from being
+    confused with adjacent prose.
+    """
+
+    cleaned = safe_http_url(url)
+    if cleaned is None:
+        return None
+    return f"{URL_FENCE_OPEN}{_neutralize_fence_markers(cleaned)}{URL_FENCE_CLOSE}"
