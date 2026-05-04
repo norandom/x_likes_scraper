@@ -139,6 +139,17 @@ def _l2_normalize(vec: np.ndarray) -> np.ndarray:
     return vec / norm
 
 
+def _extract_embeddings(response: object) -> list[list[float]]:
+    """Sort the SDK response data by ``.index`` and return the vectors.
+
+    The OpenAI embeddings API does not guarantee response order matches
+    request order; sorting by ``index`` restores the alignment.
+    """
+
+    sorted_data = sorted(response.data, key=lambda d: d.index)
+    return [list(d.embedding) for d in sorted_data]
+
+
 # ---------------------------------------------------------------------------
 # Embedder
 
@@ -237,57 +248,67 @@ class Embedder:
                     model=self.model_name,
                     input=texts,
                 )
-            except openai.AuthenticationError as exc:
-                # Auth errors are terminal; do not retry, surface immediately.
-                raise EmbeddingError(
-                    f"OpenRouter authentication failed (check "
-                    f"OPENROUTER_API_KEY): {exc}"
-                ) from exc
-            except openai.RateLimitError as exc:
-                last_error = exc
-            except openai.APIConnectionError as exc:
-                last_error = exc
-            except openai.APIStatusError as exc:
-                # Only retry transient 5xx; 4xx other than 401/403 are
-                # caller errors and should fail fast.
-                status = getattr(exc, "status_code", None)
-                if isinstance(status, int) and 500 <= status < 600:
-                    last_error = exc
-                else:
-                    raise EmbeddingError(
-                        f"OpenRouter embeddings request failed "
-                        f"(status={status}): {exc}"
-                    ) from exc
-            except ValueError as exc:
-                # The OpenAI SDK's response parser raises ValueError when
-                # the upstream returns 200 with empty `data`. This is a
-                # provider-side payload-shape problem (common with flaky
-                # free-tier endpoints) and is not retryable. Surface it
-                # with a clear, actionable message.
-                raise EmbeddingError(
-                    f"OpenRouter returned an empty embeddings payload for "
-                    f"model={self.model_name!r} (batch size {len(texts)}): "
-                    f"{exc}. Try a different model (e.g. "
-                    f"openai/text-embedding-3-small)."
-                ) from exc
+            except (
+                openai.AuthenticationError,
+                openai.APIStatusError,
+                openai.RateLimitError,
+                openai.APIConnectionError,
+                ValueError,
+            ) as exc:
+                # ``_classify_call_error`` raises on terminal errors and
+                # returns the exception when it is retryable.
+                last_error = self._classify_call_error(exc, len(texts))
             else:
-                # Success: sort by .index, return the embedding lists.
-                sorted_data = sorted(
-                    response.data, key=lambda d: d.index
-                )
-                return [list(d.embedding) for d in sorted_data]
+                return _extract_embeddings(response)
 
-            # Sleep between attempts. Skip the final sleep when there will
-            # not be another attempt.
+            # Sleep between attempts. Skip the final sleep.
             if attempt < max_attempts - 1:
                 time.sleep(2 ** attempt)
 
-        # All retries exhausted on a transient error.
         raise EmbeddingError(
             f"OpenRouter embeddings request failed after {max_attempts} "
             f"attempts (max_retries={self.max_retries}); last error: "
             f"{last_error}"
         ) from last_error
+
+    def _classify_call_error(
+        self, exc: Exception, batch_size: int
+    ) -> Exception:
+        """Decide whether ``exc`` from ``embeddings.create`` is retryable.
+
+        Raises :class:`EmbeddingError` (terminal) for auth failures, 4xx
+        non-auth status errors, and the SDK's empty-payload ``ValueError``.
+        Returns ``exc`` unchanged when the caller should retry: rate
+        limits, connection errors, and 5xx status errors.
+        """
+
+        if isinstance(exc, openai.AuthenticationError):
+            raise EmbeddingError(
+                f"OpenRouter authentication failed (check "
+                f"OPENROUTER_API_KEY): {exc}"
+            ) from exc
+
+        if isinstance(exc, openai.APIStatusError):
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int) and 500 <= status < 600:
+                return exc
+            raise EmbeddingError(
+                f"OpenRouter embeddings request failed (status={status}): {exc}"
+            ) from exc
+
+        if isinstance(exc, ValueError):
+            # The OpenAI SDK's response parser raises ValueError when the
+            # upstream returns 200 with empty ``data``. Provider-side
+            # payload-shape problem; not retryable.
+            raise EmbeddingError(
+                f"OpenRouter returned an empty embeddings payload for "
+                f"model={self.model_name!r} (batch size {batch_size}): "
+                f"{exc}. Try a different model (e.g. "
+                f"openai/text-embedding-3-small)."
+            ) from exc
+
+        # RateLimitError and APIConnectionError fall through here.
+        return exc
 
     # ------------------------------------------------------------------
     # Higher-level methods
@@ -575,6 +596,75 @@ def _save_cache(
         ) from exc
 
 
+def _read_meta_or_none(cache_meta: Path) -> dict | None:
+    """Read and JSON-parse the meta sidecar.
+
+    Returns the parsed dict, or ``None`` when the file is missing or the
+    JSON is malformed. Raises :class:`EmbeddingError` on real I/O errors
+    (permission denied on a file that exists, etc.) so genuine problems
+    are not silently masked as cache misses.
+    """
+
+    try:
+        with open(cache_meta, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    except OSError as exc:
+        raise EmbeddingError(
+            f"Failed to read embedding cache metadata at {cache_meta}: {exc}"
+        ) from exc
+
+
+def _validate_meta(
+    meta: dict,
+    expected_model: str,
+    expected_ids: set[str],
+    expected_schema_version: int,
+) -> tuple[list[str], int] | None:
+    """Verify the meta dict matches the current expectations.
+
+    Returns ``(tweet_ids_in_order, embedding_dim)`` when every field is
+    present, well-typed, and matches the expectations. Returns ``None``
+    when any check fails — every miss forces a rebuild via the same path.
+    """
+
+    schema_version = meta.get("schema_version")
+    if not isinstance(schema_version, int) or schema_version != expected_schema_version:
+        return None
+
+    cached_model = meta.get("model_name")
+    if not isinstance(cached_model, str) or cached_model != expected_model:
+        return None
+
+    tweet_ids = meta.get("tweet_ids_in_order")
+    if not isinstance(tweet_ids, list) or not all(isinstance(t, str) for t in tweet_ids):
+        return None
+    if set(tweet_ids) != expected_ids:
+        return None
+
+    embedding_dim = meta.get("embedding_dim")
+    if not isinstance(embedding_dim, int):
+        return None
+
+    return tweet_ids, embedding_dim
+
+
+def _load_matrix_or_none(cache_npy: Path) -> np.ndarray | None:
+    """Load the npy matrix, or ``None`` on missing / corrupt file."""
+
+    try:
+        return np.load(cache_npy, allow_pickle=False)
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError):
+        # ``np.load`` raises ValueError on a malformed npy header and
+        # OSError on truncated reads. Both are recoverable via rebuild.
+        return None
+
+
 def _load_cache(
     cache_npy: Path,
     cache_meta: Path,
@@ -584,82 +674,34 @@ def _load_cache(
 ) -> CorpusEmbeddings | None:
     """Load the cached corpus if every invalidation check passes.
 
-    Returns a :class:`CorpusEmbeddings` only when:
+    Returns a :class:`CorpusEmbeddings` only when both files exist and
+    parse cleanly, the meta fields all match the current expectations,
+    and the matrix shape matches the meta. Returns ``None`` on any miss
+    so the orchestrator falls through to a rebuild.
 
-    * Both files exist and parse cleanly.
-    * ``meta["schema_version"] == expected_schema_version``.
-    * ``meta["model_name"] == expected_model``.
-    * ``set(meta["tweet_ids_in_order"]) == expected_ids``.
-    * ``matrix.shape == (len(meta["tweet_ids_in_order"]), meta["embedding_dim"])``.
-
-    Returns ``None`` when ANY of those checks fails. Missing files,
-    malformed JSON, corrupt npy data, schema mismatch, model mismatch,
-    id-set mismatch, and shape mismatch all map to ``None`` — they all
-    force a rebuild via the same code path.
-
-    This helper does not raise on the "rebuild is needed" cases. The only
-    exceptions that propagate out are unexpected I/O errors that are not
-    "file is missing" (e.g. a permission denied on a file that does
-    exist), which surface as :class:`EmbeddingError` so real I/O problems
-    are not silently masked as cache misses.
+    Real I/O errors (vs. "file missing") on the meta read surface as
+    :class:`EmbeddingError` rather than being swallowed.
     """
 
-    # Existence check up front. This avoids relying on FileNotFoundError
-    # round-trips deeper in the pipeline.
     if not cache_npy.exists() or not cache_meta.exists():
         return None
 
-    # Parse metadata. JSON / encoding errors -> rebuild.
-    try:
-        with open(cache_meta, "r", encoding="utf-8") as fh:
-            meta = json.load(fh)
-    except FileNotFoundError:
-        # Race between the existence check and the open: treat as missing.
-        return None
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    except OSError as exc:
-        # Real I/O problem (e.g. permission denied). Surface it.
-        raise EmbeddingError(
-            f"Failed to read embedding cache metadata at {cache_meta}: {exc}"
-        ) from exc
-
-    # Schema version. Missing field or non-int counts as "absent" -> rebuild.
-    schema_version = meta.get("schema_version")
-    if not isinstance(schema_version, int) or schema_version != expected_schema_version:
+    meta = _read_meta_or_none(cache_meta)
+    if meta is None:
         return None
 
-    # Model name. Mismatch (or missing) -> rebuild.
-    cached_model = meta.get("model_name")
-    if not isinstance(cached_model, str) or cached_model != expected_model:
+    validated = _validate_meta(
+        meta, expected_model, expected_ids, expected_schema_version
+    )
+    if validated is None:
+        return None
+    tweet_ids, embedding_dim = validated
+
+    matrix = _load_matrix_or_none(cache_npy)
+    if matrix is None:
         return None
 
-    # Tweet ids in order. Validate type, then compare as sets.
-    tweet_ids = meta.get("tweet_ids_in_order")
-    if not isinstance(tweet_ids, list) or not all(isinstance(t, str) for t in tweet_ids):
-        return None
-    if set(tweet_ids) != expected_ids:
-        return None
-
-    # Embedding dim must be present and an int for the shape check.
-    embedding_dim = meta.get("embedding_dim")
-    if not isinstance(embedding_dim, int):
-        return None
-
-    # Load the matrix. Corrupt files raise ValueError or OSError; both -> None.
-    try:
-        matrix = np.load(cache_npy, allow_pickle=False)
-    except FileNotFoundError:
-        return None
-    except (ValueError, OSError):
-        # ``np.load`` raises ValueError on a malformed npy header and
-        # OSError on truncated reads. Both are recoverable via rebuild.
-        return None
-
-    # Shape sanity. The metadata records (n_tweets, embedding_dim); the
-    # matrix must agree exactly.
-    expected_shape = (len(tweet_ids), embedding_dim)
-    if matrix.shape != expected_shape:
+    if matrix.shape != (len(tweet_ids), embedding_dim):
         return None
 
     return CorpusEmbeddings(
