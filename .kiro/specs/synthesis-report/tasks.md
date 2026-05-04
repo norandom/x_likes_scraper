@@ -42,7 +42,7 @@
   - _Boundary: synthesis test scaffolding_
 
 - [ ] 2. Core leaf modules — security, persistence, KG, extraction, and rendering
-- [ ] 2.1 (P) Implement the SSRF guard with the two-tier blocklist and CIDR allowlist
+- [x] 2.1 (P) Implement the SSRF guard with the two-tier blocklist and CIDR allowlist
   - Resolve the URL hostname once, walk the address candidates, and pin the first non-blocked IP so the connection cannot be rebound mid-fetch
   - Treat loopback, cloud-metadata addresses (AWS / GCP / Azure / DigitalOcean / OCI), broadcast / multicast, and IANA-reserved ranges as unconditional blocks that no allowlist can override
   - Block RFC1918, IPv4 link-local (minus the metadata IP), IPv6 link-local, and IPv6 ULA unless the resolved address falls inside the operator-supplied private-range CIDR allowlist
