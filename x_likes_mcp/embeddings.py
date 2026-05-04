@@ -39,6 +39,7 @@ import numpy as np
 import openai
 
 from .config import DEFAULT_EMBEDDING_MODEL, DEFAULT_OPENROUTER_BASE_URL
+from .corpus_text import tweet_index_text
 
 if TYPE_CHECKING:
     from x_likes_exporter import Tweet
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
 # module see the same literal as ``Config`` defaults. ``config.py`` remains
 # the single source of truth for the literal values.
 
-CACHE_SCHEMA_VERSION: int = 1
+CACHE_SCHEMA_VERSION: int = 2
 DEFAULT_BASE_URL: str = DEFAULT_OPENROUTER_BASE_URL
 DEFAULT_TOP_K: int = 200
 DEFAULT_BATCH_SIZE: int = 32
@@ -757,7 +758,7 @@ def open_or_build_corpus(
     # Cache miss: rebuild. ``sorted`` gives the stable ordering the design
     # requires so cache hits across runs do not flake on dict ordering.
     ordered_ids = sorted(tweets_by_id.keys())
-    texts = [tweets_by_id[i].text or "" for i in ordered_ids]
+    texts = [tweet_index_text(tweets_by_id[i]) for i in ordered_ids]
 
     matrix = embedder.embed_corpus(ordered_ids, texts)
 

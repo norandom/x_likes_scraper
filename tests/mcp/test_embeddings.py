@@ -79,7 +79,9 @@ def _make_embedder(api_key: str | None = "test-key", **overrides: object) -> emb
 
 
 def test_constants_exposed_with_documented_values() -> None:
-    assert emb.CACHE_SCHEMA_VERSION == 1
+    # Schema version was bumped to 2 when corpus text started including
+    # tweet.urls (resolved short-link expansions) alongside tweet.text.
+    assert emb.CACHE_SCHEMA_VERSION == 2
     assert emb.DEFAULT_TOP_K == 200
     assert emb.DEFAULT_BATCH_SIZE == 32
     assert emb.DEFAULT_MAX_RETRIES == 3

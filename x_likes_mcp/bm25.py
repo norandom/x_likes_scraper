@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from rank_bm25 import BM25Okapi
 
+from .corpus_text import tweet_index_text
+
 if TYPE_CHECKING:
     from x_likes_exporter import Tweet
 
@@ -131,7 +133,9 @@ class BM25Index:
         if not ordered_ids:
             return cls(bm25=None, ordered_ids=[])
 
-        tokenized = [tokenize(tweets_by_id[tid].text or "") for tid in ordered_ids]
+        tokenized = [
+            tokenize(tweet_index_text(tweets_by_id[tid])) for tid in ordered_ids
+        ]
 
         # ``BM25Okapi`` divides by the average document length; if every
         # document tokenizes to ``[]`` the average is 0 and the

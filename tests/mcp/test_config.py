@@ -49,9 +49,10 @@ def test_load_config_minimal_env_returns_populated_config(
     assert config.likes_json == Path("output") / "likes.json"
     assert config.cache_path == Path("output") / "tweet_tree_cache.pkl"
     # Default RankerWeights embedded; spot-check the documented defaults.
+    # Defaults are tuned for search (relevance dominates engagement).
     assert config.ranker_weights == RankerWeights()
-    assert config.ranker_weights.relevance == 10.0
-    assert config.ranker_weights.affinity == 3.0
+    assert config.ranker_weights.relevance == 80.0
+    assert config.ranker_weights.affinity == 1.0
     assert config.ranker_weights.recency_halflife_days == 180.0
 
 
@@ -316,3 +317,53 @@ def test_load_config_default_constants_match_field_defaults() -> None:
 
     assert DEFAULT_OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
     assert DEFAULT_EMBEDDING_MODEL == "openai/text-embedding-3-small"
+
+
+def test_resolve_env_shell_overrides_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shell ``os.environ`` keys win over ``.env`` file values.
+
+    Regression: the previous loader returned ``.env`` early when the file
+    existed, so commands like ``RANKER_W_RELEVANCE=80 uv run x-likes-mcp``
+    were silent no-ops on any project that shipped a ``.env``. The merge
+    is now ``file_values <- os.environ``.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "OPENAI_BASE_URL=from_file\n"
+        "OPENAI_MODEL=from_file\n"
+        "RANKER_W_RELEVANCE=10\n",
+        encoding="utf-8",
+    )
+    os.environ["RANKER_W_RELEVANCE"] = "42"
+
+    config = load_config(env_path=dotenv)
+
+    # File-only key still propagates.
+    assert config.openai_base_url == "from_file"
+    # Shell-supplied override wins over the file value.
+    assert config.ranker_weights.relevance == 42.0
+
+
+def test_resolve_env_falls_back_to_dotenv_when_shell_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the shell has no override, ``.env`` values still reach the loader."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    os.environ.pop("RANKER_W_RELEVANCE", None)
+
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "OPENAI_BASE_URL=x\nOPENAI_MODEL=m\nRANKER_W_RELEVANCE=7\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path=dotenv)
+    assert config.ranker_weights.relevance == 7.0

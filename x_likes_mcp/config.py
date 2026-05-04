@@ -43,18 +43,23 @@ class ConfigError(Exception):
 class RankerWeights:
     """Per-feature weights for the heavy-ranker-style scoring formula.
 
-    Defaults are intentionally engagement-and-affinity-heavy: tweets the
-    user already returned to (high author affinity) and tweets that struck
-    a chord with the rest of the network (high engagement) outrank
-    one-off topical matches.
+    Defaults are tuned for *search* (relevance dominates), not feed-style
+    recommendation. With cosine ``relevance`` in ``[0, 1]`` the maximum
+    relevance contribution is ``80``, while ``log1p`` of typical engagement
+    counts contributes 1-3 each. This keeps niche queries (e.g. "AI
+    pentesting") from being buried by popular adjacent tweets that share
+    only the broad topic.
+
+    Override any field via ``RANKER_W_<UPPER>`` env variables when a
+    different balance is wanted.
     """
 
-    relevance: float = 10.0
-    favorite: float = 2.0
-    retweet: float = 2.5
-    reply: float = 1.0
-    view: float = 0.5
-    affinity: float = 3.0
+    relevance: float = 80.0
+    favorite: float = 0.5
+    retweet: float = 0.5
+    reply: float = 0.3
+    view: float = 0.1
+    affinity: float = 1.0
     recency: float = 1.5
     verified: float = 0.5
     media: float = 0.3
@@ -108,16 +113,31 @@ def _resolve_env(
     env_path: Path | None,
     env: dict[str, str] | None,
 ) -> dict[str, str]:
-    """Pick the source of environment values for :func:`load_config`."""
+    """Pick the source of environment values for :func:`load_config`.
+
+    Precedence (highest first):
+      1. Explicit ``env`` dict — used as-is, intended for tests.
+      2. ``os.environ`` keys — shell exports always win over file values
+         (12-factor convention; lets users override ``.env`` per command).
+      3. ``env_path`` if provided, else CWD ``.env`` if it exists.
+
+    The previous behavior returned the file early when ``.env`` existed,
+    silently shadowing shell exports. That made flags like
+    ``RANKER_W_RELEVANCE=80 uv run x-likes-mcp ...`` no-ops.
+    """
 
     if env is not None:
         return dict(env)
+
     if env_path is not None:
-        return _read_env_file(env_path)
-    default_dotenv = Path.cwd() / ".env"
-    if default_dotenv.exists():
-        return _read_env_file(default_dotenv)
-    return dict(os.environ)
+        file_values = _read_env_file(env_path)
+    else:
+        default_dotenv = Path.cwd() / ".env"
+        file_values = _read_env_file(default_dotenv) if default_dotenv.exists() else {}
+
+    merged = dict(file_values)
+    merged.update(os.environ)
+    return merged
 
 
 def _require(env: dict[str, str], name: str) -> str:
