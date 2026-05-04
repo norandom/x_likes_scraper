@@ -56,9 +56,13 @@ class Checkpoint:
         with open(self.checkpoint_file, 'w', encoding='utf-8') as f:
             json.dump(checkpoint_data, f, indent=2)
 
-        # pickle is faster than re-serializing Tweet objects to JSON each save
+        # pickle is faster than re-serializing Tweet objects to JSON each save.
+        # Trust boundary: this file is the exporter's own checkpoint, written
+        # under output/ on the same machine that loads it. Single-user, no
+        # network exposure, no untrusted producer; deserialization risk is
+        # bounded to whatever the user puts in their own output directory.
         with open(self.tweets_file, 'wb') as f:
-            pickle.dump(tweets, f)
+            pickle.dump(tweets, f)  # nosem: avoid-pickle
 
         print(f"✓ Checkpoint saved: {total_fetched} tweets")
 
@@ -77,10 +81,11 @@ class Checkpoint:
             with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
                 checkpoint_data = json.load(f)
 
-            # Load tweets
+            # Load tweets. See save() for the trust-boundary rationale that
+            # makes pickle here acceptable (single-user, local-only file).
             if self.tweets_file.exists():
                 with open(self.tweets_file, 'rb') as f:
-                    tweets = pickle.load(f)
+                    tweets = pickle.load(f)  # nosem: avoid-pickle
                 checkpoint_data['tweets'] = tweets
             else:
                 checkpoint_data['tweets'] = []
