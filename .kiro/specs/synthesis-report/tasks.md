@@ -51,7 +51,7 @@
   - _Requirements: 4.1, 4.2, 4.3, 4.4_
   - _Boundary: ssrf_guard_
 
-- [ ] 2.2 (P) Implement the sha256-keyed URL cache
+- [x] 2.2 (P) Implement the sha256-keyed URL cache
   - Provide get / put / expire operations keyed on `sha256(url)` under the configured cache root, with atomic writes via temp-file + rename
   - Persist only post-sanitize markdown plus the metadata fields documented in the design (`url`, `final_url`, `content_type`, `fetched_at`); raw HTML / PDF bytes never touch disk
   - Treat entries younger than the configured TTL (default 30 days) as fresh and re-fetch on miss or stale; create the cache directory on first write
