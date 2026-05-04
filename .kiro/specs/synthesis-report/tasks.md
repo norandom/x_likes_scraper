@@ -10,7 +10,7 @@
   - _Requirements: 6.1, 6.3, 6.4, 11.1_
   - _Boundary: project metadata_
 
-- [ ] 1.2 Extend the configuration loader with synthesis-report env vars
+- [x] 1.2 Extend the configuration loader with synthesis-report env vars
   - Surface `crawl4ai_base_url`, `url_cache_dir`, `url_cache_ttl_days`, `synthesis_max_hops`, `synthesis_per_source_bytes`, `synthesis_total_context_bytes`, `synthesis_round_two_k`, and `url_fetch_allowed_private_cidrs` on the existing config object with documented defaults
   - Parse the comma-separated CIDR allowlist into IP-network objects at load time so malformed values fail loudly before any fetch
   - Preserve the existing `OPENAI_BASE_URL` / `OPENAI_MODEL` reads as the default synthesis LM endpoint; do not introduce a separate synthesis endpoint

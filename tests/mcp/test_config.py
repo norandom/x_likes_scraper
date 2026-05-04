@@ -9,14 +9,21 @@ not leak between tests.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
 
 import pytest
 
 from x_likes_mcp.config import (
+    DEFAULT_CRAWL4AI_BASE_URL,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_SYNTHESIS_MAX_HOPS,
+    DEFAULT_SYNTHESIS_PER_SOURCE_BYTES,
+    DEFAULT_SYNTHESIS_ROUND_TWO_K,
+    DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES,
+    DEFAULT_URL_CACHE_TTL_DAYS,
     Config,
     ConfigError,
     RankerWeights,
@@ -365,3 +372,287 @@ def test_resolve_env_falls_back_to_dotenv_when_shell_missing(
 
     config = load_config(env_path=dotenv)
     assert config.ranker_weights.relevance == 7.0
+
+
+# ---------------------------------------------------------------------------
+# Synthesis-report fields (synthesis-report spec, Requirement 4.3 + 12.1-12.3)
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_synthesis_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``.env`` that omits every synthesis-report var still loads.
+
+    Covers Requirement 12.3: each new env var has a documented default
+    that works without any extra configuration. Loading from an empty
+    env produces a working ``Config`` with the design-documented defaults.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={})
+
+    assert config.crawl4ai_base_url == "http://127.0.0.1:11235"
+    assert config.crawl4ai_base_url == DEFAULT_CRAWL4AI_BASE_URL
+    # url_cache_dir tracks output_dir by default — not an absolute path.
+    assert config.url_cache_dir == Path("output") / "url_cache"
+    assert config.url_cache_ttl_days == 30
+    assert config.url_cache_ttl_days == DEFAULT_URL_CACHE_TTL_DAYS
+    assert config.synthesis_max_hops == 2
+    assert config.synthesis_max_hops == DEFAULT_SYNTHESIS_MAX_HOPS
+    assert config.synthesis_per_source_bytes == 4096
+    assert config.synthesis_per_source_bytes == DEFAULT_SYNTHESIS_PER_SOURCE_BYTES
+    assert config.synthesis_total_context_bytes == 32768
+    assert config.synthesis_total_context_bytes == DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES
+    assert config.synthesis_round_two_k == 5
+    assert config.synthesis_round_two_k == DEFAULT_SYNTHESIS_ROUND_TWO_K
+    # Strict default: no private CIDR is allowed unless the operator opts in.
+    assert config.url_fetch_allowed_private_cidrs == []
+
+
+def test_load_config_synthesis_explicit_values_flow_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit env values override every synthesis default.
+
+    Covers Requirement 12.2 (CRAWL4AI_BASE_URL override) and 12.3 (the
+    other synthesis vars are read from documented env names).
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "CRAWL4AI_BASE_URL": "http://crawl4ai.internal:8080",
+            "URL_CACHE_DIR": "/tmp/x_likes/url_cache",
+            "URL_CACHE_TTL_DAYS": "7",
+            "SYNTHESIS_MAX_HOPS": "3",
+            "SYNTHESIS_PER_SOURCE_BYTES": "2048",
+            "SYNTHESIS_TOTAL_CONTEXT_BYTES": "16384",
+            "SYNTHESIS_ROUND_TWO_K": "8",
+        }
+    )
+
+    assert config.crawl4ai_base_url == "http://crawl4ai.internal:8080"
+    # Absolute URL_CACHE_DIR is honored verbatim (not joined under output_dir).
+    assert config.url_cache_dir == Path("/tmp/x_likes/url_cache")
+    assert config.url_cache_ttl_days == 7
+    assert config.synthesis_max_hops == 3
+    assert config.synthesis_per_source_bytes == 2048
+    assert config.synthesis_total_context_bytes == 16384
+    assert config.synthesis_round_two_k == 8
+
+
+def test_load_config_url_cache_dir_tracks_output_dir_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``URL_CACHE_DIR`` unset → cache dir tracks ``OUTPUT_DIR``.
+
+    The url-cache directory follows the project's ``OUTPUT_DIR`` so
+    operators only have to override one variable to relocate state.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"OUTPUT_DIR": "/var/lib/xlikes"})
+
+    assert config.output_dir == Path("/var/lib/xlikes")
+    assert config.url_cache_dir == Path("/var/lib/xlikes") / "url_cache"
+
+
+def test_load_config_url_cache_dir_explicit_overrides_output_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``URL_CACHE_DIR`` is honored verbatim, not joined."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OUTPUT_DIR": "/var/lib/xlikes",
+            "URL_CACHE_DIR": "/srv/cache/url",
+        }
+    )
+
+    assert config.output_dir == Path("/var/lib/xlikes")
+    # Absolute override wins; not joined under output_dir.
+    assert config.url_cache_dir == Path("/srv/cache/url")
+
+
+def test_load_config_cidr_allowlist_parses_comma_separated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``URL_FETCH_ALLOWED_PRIVATE_CIDRS`` parses into IP-network objects.
+
+    Covers Requirement 4.3 / 12.3: the comma-separated allowlist is
+    parsed at load time so malformed values fail loudly before any
+    network fetch happens.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "URL_FETCH_ALLOWED_PRIVATE_CIDRS": "10.100.0.0/16,192.168.10.0/24",
+        }
+    )
+
+    assert config.url_fetch_allowed_private_cidrs == [
+        ipaddress.ip_network("10.100.0.0/16", strict=False),
+        ipaddress.ip_network("192.168.10.0/24", strict=False),
+    ]
+
+
+def test_load_config_cidr_allowlist_handles_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace around comma-separated CIDR entries is tolerated."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "URL_FETCH_ALLOWED_PRIVATE_CIDRS": "  10.100.0.0/16 , 192.168.10.0/24  ",
+        }
+    )
+
+    assert config.url_fetch_allowed_private_cidrs == [
+        ipaddress.ip_network("10.100.0.0/16", strict=False),
+        ipaddress.ip_network("192.168.10.0/24", strict=False),
+    ]
+
+
+def test_load_config_cidr_allowlist_empty_value_is_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty ``URL_FETCH_ALLOWED_PRIVATE_CIDRS`` yields ``[]`` (strict default)."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"URL_FETCH_ALLOWED_PRIVATE_CIDRS": ""})
+    assert config.url_fetch_allowed_private_cidrs == []
+
+
+def test_load_config_cidr_allowlist_supports_ipv6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IPv6 CIDRs parse via ``ipaddress.ip_network`` like IPv4."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={"URL_FETCH_ALLOWED_PRIVATE_CIDRS": "fd00::/8,10.0.0.0/8"})
+    assert config.url_fetch_allowed_private_cidrs == [
+        ipaddress.ip_network("fd00::/8", strict=False),
+        ipaddress.ip_network("10.0.0.0/8", strict=False),
+    ]
+
+
+def test_load_config_malformed_cidr_raises_with_offending_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed CIDR raises ``ConfigError`` immediately, naming the bad value.
+
+    Covers Requirement 4.3: the allowlist parses at load time so a typo
+    surfaces before any fetch happens — not as a silent skip during
+    egress checks.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(
+            env={
+                "URL_FETCH_ALLOWED_PRIVATE_CIDRS": "10.100.0.0/16,not-a-cidr",
+            }
+        )
+    # The message must name both the env var and the offending value so
+    # an operator can find the typo without guessing.
+    msg = str(excinfo.value)
+    assert "URL_FETCH_ALLOWED_PRIVATE_CIDRS" in msg
+    assert "not-a-cidr" in msg
+
+
+def test_load_config_malformed_int_synthesis_var_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric ``URL_CACHE_TTL_DAYS`` is loud, not silent."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(env={"URL_CACHE_TTL_DAYS": "forever"})
+    msg = str(excinfo.value)
+    assert "URL_CACHE_TTL_DAYS" in msg
+    assert "forever" in msg
+
+
+def test_load_config_synthesis_does_not_disturb_openai_or_openrouter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding synthesis env vars does not change OpenAI / OpenRouter behavior.
+
+    Regression guard for Requirement 12.1: the synthesizer LM reuses
+    ``OPENAI_BASE_URL`` / ``OPENAI_MODEL`` — there is no separate
+    synthesis endpoint pair. Setting the synthesis vars must not
+    perturb the existing walker / OpenRouter fields.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(
+        env={
+            "OPENAI_BASE_URL": "http://walker.example/v1",
+            "OPENAI_MODEL": "walker-model",
+            "OPENAI_API_KEY": "sk-walker",
+            "OPENROUTER_API_KEY": "sk-or-test",
+            "OPENROUTER_BASE_URL": "https://openrouter.example/api/v1",
+            "EMBEDDING_MODEL": "some-org/some-embedding-model",
+            "CRAWL4AI_BASE_URL": "http://crawl4ai.internal:8080",
+            "SYNTHESIS_MAX_HOPS": "4",
+            "URL_FETCH_ALLOWED_PRIVATE_CIDRS": "10.0.0.0/8",
+        }
+    )
+
+    # Existing fields untouched.
+    assert config.openai_base_url == "http://walker.example/v1"
+    assert config.openai_model == "walker-model"
+    assert config.openai_api_key == "sk-walker"
+    assert config.openrouter_api_key == "sk-or-test"
+    assert config.openrouter_base_url == "https://openrouter.example/api/v1"
+    assert config.embedding_model == "some-org/some-embedding-model"
+    # New fields populated from env.
+    assert config.crawl4ai_base_url == "http://crawl4ai.internal:8080"
+    assert config.synthesis_max_hops == 4
+
+
+def test_config_remains_frozen_dataclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Config`` stays frozen after the synthesis-report fields are added.
+
+    Mutation must continue to raise ``FrozenInstanceError`` so callers
+    cannot accidentally rewrite the resolved configuration at runtime.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    config = load_config(env={})
+
+    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
+        config.crawl4ai_base_url = "http://other"  # type: ignore[misc]
+
+
+def test_load_config_default_synthesis_constants_match_field_defaults() -> None:
+    """Synthesis default constants match the documented values from design.md.
+
+    Single source of truth for downstream modules (`fetcher`, `cache`,
+    `orchestrator`) that import these constants directly.
+    """
+
+    assert DEFAULT_CRAWL4AI_BASE_URL == "http://127.0.0.1:11235"
+    assert DEFAULT_URL_CACHE_TTL_DAYS == 30
+    assert DEFAULT_SYNTHESIS_MAX_HOPS == 2
+    assert DEFAULT_SYNTHESIS_PER_SOURCE_BYTES == 4096
+    assert DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES == 32768
+    assert DEFAULT_SYNTHESIS_ROUND_TWO_K == 5
