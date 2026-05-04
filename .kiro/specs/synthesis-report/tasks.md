@@ -18,7 +18,7 @@
   - _Requirements: 4.3, 12.1, 12.2, 12.3_
   - _Boundary: config_
 
-- [ ] 1.3 Add the four new fence-marker families to the shared sanitize module
+- [x] 1.3 Add the four new fence-marker families to the shared sanitize module
   - Define `URL_BODY`, `ENTITY`, `KG_NODE`, and `KG_EDGE` open/close markers and add them to the existing all-fences set so neutralization scrubs every family from every body
   - Provide per-family fence helpers that reuse the existing sanitize and marker-neutralization passes
   - Unit tests show that a body containing any of the eight new markers is neutralized before it is wrapped in a different family's fence (no marker can prematurely close a fence and reopen another)

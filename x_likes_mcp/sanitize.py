@@ -95,12 +95,41 @@ LLM_FENCE_OPEN = "<<<TWEET_BODY>>>"
 LLM_FENCE_CLOSE = "<<<END_TWEET_BODY>>>"
 URL_FENCE_OPEN = "<<<URL>>>"
 URL_FENCE_CLOSE = "<<<END_URL>>>"
+# Synthesis-report fences. Each family wraps a different kind of
+# untrusted body the walker may inject into a downstream prompt:
+#
+# * ``URL_BODY`` — long fetched page bodies (multi-line).
+# * ``ENTITY``   — short entity strings extracted from a tweet
+#                  (single-line; empty inputs produce ``None``).
+# * ``KG_NODE``  — knowledge-graph node labels (single-line; empty
+#                  labels still emit the structural placeholder).
+# * ``KG_EDGE``  — knowledge-graph edge labels (single-line; empty
+#                  labels still emit the structural placeholder).
+URL_BODY_FENCE_OPEN: str = "<<<URL_BODY>>>"
+URL_BODY_FENCE_CLOSE: str = "<<<END_URL_BODY>>>"
+ENTITY_FENCE_OPEN: str = "<<<ENTITY>>>"
+ENTITY_FENCE_CLOSE: str = "<<<END_ENTITY>>>"
+KG_NODE_FENCE_OPEN: str = "<<<KG_NODE>>>"
+KG_NODE_FENCE_CLOSE: str = "<<<END_KG_NODE>>>"
+KG_EDGE_FENCE_OPEN: str = "<<<KG_EDGE>>>"
+KG_EDGE_FENCE_CLOSE: str = "<<<END_KG_EDGE>>>"
 _FENCE_NEUTRAL = "[FENCE]"
+# Every marker any wrapper might emit. ``_neutralize_fence_markers``
+# scrubs every entry from every body so a marker from one family cannot
+# prematurely close another family's fence and reopen prompt control.
 _ALL_FENCES = (
     LLM_FENCE_OPEN,
     LLM_FENCE_CLOSE,
     URL_FENCE_OPEN,
     URL_FENCE_CLOSE,
+    URL_BODY_FENCE_OPEN,
+    URL_BODY_FENCE_CLOSE,
+    ENTITY_FENCE_OPEN,
+    ENTITY_FENCE_CLOSE,
+    KG_NODE_FENCE_OPEN,
+    KG_NODE_FENCE_CLOSE,
+    KG_EDGE_FENCE_OPEN,
+    KG_EDGE_FENCE_CLOSE,
 )
 
 
@@ -203,3 +232,61 @@ def fence_url_for_llm(url: object) -> str | None:
     if cleaned is None:
         return None
     return f"{URL_FENCE_OPEN}{_neutralize_fence_markers(cleaned)}{URL_FENCE_CLOSE}"
+
+
+def fence_url_body_for_llm(body: str) -> str:
+    """Wrap a fetched page / URL body in :data:`URL_BODY_FENCE_OPEN` / :data:`URL_BODY_FENCE_CLOSE`.
+
+    Mirrors :func:`fence_for_llm`'s newline shape (open marker, newline,
+    body, newline, close marker) because URL bodies are multi-line. The
+    body is sanitized first, then every fence marker from every family
+    in :data:`_ALL_FENCES` is replaced with :data:`_FENCE_NEUTRAL` so a
+    crafted page cannot prematurely close this fence — or any other
+    fence — and reopen prompt control.
+    """
+
+    sanitized = _neutralize_fence_markers(sanitize_text(body))
+    return f"{URL_BODY_FENCE_OPEN}\n{sanitized}\n{URL_BODY_FENCE_CLOSE}"
+
+
+def fence_entity_for_llm(entity: object) -> str | None:
+    """Wrap a short single-line entity string in :data:`ENTITY_FENCE_OPEN` / :data:`ENTITY_FENCE_CLOSE`.
+
+    Returns ``None`` when the input is not a non-empty string after
+    sanitization and ``strip()``. Entities that degenerate to empty
+    strings are dropped from the prompt entirely rather than emitted as
+    empty fences — an empty entity carries no signal for the LM.
+
+    Output shape mirrors :func:`fence_url_for_llm`: a single line with
+    no newlines around the body.
+    """
+
+    sanitized = sanitize_text(entity).strip()
+    if not sanitized:
+        return None
+    return f"{ENTITY_FENCE_OPEN}{_neutralize_fence_markers(sanitized)}{ENTITY_FENCE_CLOSE}"
+
+
+def fence_kg_node_for_llm(label: str) -> str:
+    """Wrap a knowledge-graph node label on a single line.
+
+    Unlike :func:`fence_entity_for_llm`, this never returns ``None``: a
+    KG node always exists structurally (it has an id and edges even when
+    its label degenerates to an empty string), so we emit the bare
+    ``<<<KG_NODE>>><<<END_KG_NODE>>>`` placeholder rather than dropping
+    the slot entirely.
+    """
+
+    sanitized = _neutralize_fence_markers(sanitize_text(label))
+    return f"{KG_NODE_FENCE_OPEN}{sanitized}{KG_NODE_FENCE_CLOSE}"
+
+
+def fence_kg_edge_for_llm(label: str) -> str:
+    """Wrap a knowledge-graph edge label on a single line.
+
+    Same contract as :func:`fence_kg_node_for_llm`: empty labels still
+    emit a placeholder fence so the LM sees the structural slot.
+    """
+
+    sanitized = _neutralize_fence_markers(sanitize_text(label))
+    return f"{KG_EDGE_FENCE_OPEN}{sanitized}{KG_EDGE_FENCE_CLOSE}"

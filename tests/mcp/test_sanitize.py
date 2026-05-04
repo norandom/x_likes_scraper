@@ -14,11 +14,23 @@ from __future__ import annotations
 import pytest
 
 from x_likes_mcp.sanitize import (
+    ENTITY_FENCE_CLOSE,
+    ENTITY_FENCE_OPEN,
+    KG_EDGE_FENCE_CLOSE,
+    KG_EDGE_FENCE_OPEN,
+    KG_NODE_FENCE_CLOSE,
+    KG_NODE_FENCE_OPEN,
     LLM_FENCE_CLOSE,
     LLM_FENCE_OPEN,
+    URL_BODY_FENCE_CLOSE,
+    URL_BODY_FENCE_OPEN,
     URL_FENCE_CLOSE,
     URL_FENCE_OPEN,
+    fence_entity_for_llm,
     fence_for_llm,
+    fence_kg_edge_for_llm,
+    fence_kg_node_for_llm,
+    fence_url_body_for_llm,
     fence_url_for_llm,
     safe_http_url,
     sanitize_text,
@@ -229,3 +241,248 @@ def test_fence_url_for_llm_neutralizes_tweet_body_fence() -> None:
 def test_fence_url_for_llm_strips_ansi_inside_path() -> None:
     out = fence_url_for_llm("https://example.com\x1b[31m/x")
     assert out == f"{URL_FENCE_OPEN}https://example.com/x{URL_FENCE_CLOSE}"
+
+
+# ---------------------------------------------------------------------------
+# New fence families: URL_BODY, ENTITY, KG_NODE, KG_EDGE
+# ---------------------------------------------------------------------------
+
+
+def test_new_fence_marker_constants_have_documented_values() -> None:
+    """The eight new constants must be exposed with the exact spec-fixed
+    string values; downstream prompts and tests pin the wire format."""
+
+    assert URL_BODY_FENCE_OPEN == "<<<URL_BODY>>>"
+    assert URL_BODY_FENCE_CLOSE == "<<<END_URL_BODY>>>"
+    assert ENTITY_FENCE_OPEN == "<<<ENTITY>>>"
+    assert ENTITY_FENCE_CLOSE == "<<<END_ENTITY>>>"
+    assert KG_NODE_FENCE_OPEN == "<<<KG_NODE>>>"
+    assert KG_NODE_FENCE_CLOSE == "<<<END_KG_NODE>>>"
+    assert KG_EDGE_FENCE_OPEN == "<<<KG_EDGE>>>"
+    assert KG_EDGE_FENCE_CLOSE == "<<<END_KG_EDGE>>>"
+
+
+# ---------------------------------------------------------------------------
+# fence_url_body_for_llm
+# ---------------------------------------------------------------------------
+
+
+def test_fence_url_body_for_llm_wraps_with_markers() -> None:
+    out = fence_url_body_for_llm("readme content")
+    assert out.startswith(URL_BODY_FENCE_OPEN + "\n")
+    assert out.endswith("\n" + URL_BODY_FENCE_CLOSE)
+    assert "readme content" in out
+
+
+def test_fence_url_body_for_llm_neutralizes_own_open_marker() -> None:
+    body = f"prefix {URL_BODY_FENCE_OPEN} payload"
+    out = fence_url_body_for_llm(body)
+    inner = "\n".join(out.split("\n")[1:-1])
+    assert URL_BODY_FENCE_OPEN not in inner
+    assert "[FENCE]" in inner
+
+
+def test_fence_url_body_for_llm_neutralizes_own_close_marker() -> None:
+    body = f"prefix {URL_BODY_FENCE_CLOSE} payload"
+    out = fence_url_body_for_llm(body)
+    inner = "\n".join(out.split("\n")[1:-1])
+    assert URL_BODY_FENCE_CLOSE not in inner
+
+
+def test_fence_url_body_for_llm_sanitizes_body() -> None:
+    body = "doc\x1b[31m text" + chr(0x202E) + "rtl"
+    out = fence_url_body_for_llm(body)
+    assert "\x1b" not in out
+    assert chr(0x202E) not in out
+
+
+# ---------------------------------------------------------------------------
+# fence_entity_for_llm
+# ---------------------------------------------------------------------------
+
+
+def test_fence_entity_for_llm_wraps_single_line() -> None:
+    out = fence_entity_for_llm("OpenAI")
+    assert out == f"{ENTITY_FENCE_OPEN}OpenAI{ENTITY_FENCE_CLOSE}"
+
+
+def test_fence_entity_for_llm_neutralizes_own_open_marker() -> None:
+    out = fence_entity_for_llm(f"x{ENTITY_FENCE_OPEN}y")
+    assert out is not None
+    inner = out[len(ENTITY_FENCE_OPEN) : -len(ENTITY_FENCE_CLOSE)]
+    assert ENTITY_FENCE_OPEN not in inner
+    assert "[FENCE]" in inner
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\t\n", None, 42, b"bytes"])
+def test_fence_entity_for_llm_returns_none_for_empty(empty: object) -> None:
+    assert fence_entity_for_llm(empty) is None  # type: ignore[arg-type]
+
+
+def test_fence_entity_for_llm_returns_none_when_sanitize_collapses_to_empty() -> None:
+    # Whole input is bidi/control codepoints — sanitize produces empty.
+    raw = "\x1b[31m" + chr(0x202E) + chr(0x200B)
+    assert fence_entity_for_llm(raw) is None
+
+
+def test_fence_entity_for_llm_strips_ansi() -> None:
+    out = fence_entity_for_llm("Open\x1b[31mAI")
+    assert out == f"{ENTITY_FENCE_OPEN}OpenAI{ENTITY_FENCE_CLOSE}"
+
+
+# ---------------------------------------------------------------------------
+# fence_kg_node_for_llm / fence_kg_edge_for_llm
+# ---------------------------------------------------------------------------
+
+
+def test_fence_kg_node_for_llm_wraps_single_line() -> None:
+    out = fence_kg_node_for_llm("Person")
+    assert out == f"{KG_NODE_FENCE_OPEN}Person{KG_NODE_FENCE_CLOSE}"
+
+
+def test_fence_kg_node_for_llm_emits_empty_fence_for_empty_label() -> None:
+    """Unlike entities, KG nodes always exist structurally; an empty label
+    still produces an empty fence so the LM sees the placeholder."""
+
+    out = fence_kg_node_for_llm("")
+    assert out == f"{KG_NODE_FENCE_OPEN}{KG_NODE_FENCE_CLOSE}"
+
+
+def test_fence_kg_node_for_llm_emits_empty_fence_for_whitespace_label() -> None:
+    # sanitize keeps whitespace; we don't strip it here. The contract is
+    # "do not return None"; the wrapped body may be the sanitized
+    # whitespace itself. Just assert it is wrapped, never None.
+    out = fence_kg_node_for_llm("   ")
+    assert out is not None
+    assert out.startswith(KG_NODE_FENCE_OPEN)
+    assert out.endswith(KG_NODE_FENCE_CLOSE)
+
+
+def test_fence_kg_node_for_llm_neutralizes_own_marker() -> None:
+    out = fence_kg_node_for_llm(f"x{KG_NODE_FENCE_OPEN}y")
+    inner = out[len(KG_NODE_FENCE_OPEN) : -len(KG_NODE_FENCE_CLOSE)]
+    assert KG_NODE_FENCE_OPEN not in inner
+    assert "[FENCE]" in inner
+
+
+def test_fence_kg_node_for_llm_strips_ansi() -> None:
+    out = fence_kg_node_for_llm("Per\x1b[31mson")
+    assert out == f"{KG_NODE_FENCE_OPEN}Person{KG_NODE_FENCE_CLOSE}"
+
+
+def test_fence_kg_edge_for_llm_wraps_single_line() -> None:
+    out = fence_kg_edge_for_llm("knows")
+    assert out == f"{KG_EDGE_FENCE_OPEN}knows{KG_EDGE_FENCE_CLOSE}"
+
+
+def test_fence_kg_edge_for_llm_emits_empty_fence_for_empty_label() -> None:
+    out = fence_kg_edge_for_llm("")
+    assert out == f"{KG_EDGE_FENCE_OPEN}{KG_EDGE_FENCE_CLOSE}"
+
+
+def test_fence_kg_edge_for_llm_neutralizes_own_marker() -> None:
+    out = fence_kg_edge_for_llm(f"x{KG_EDGE_FENCE_OPEN}y")
+    inner = out[len(KG_EDGE_FENCE_OPEN) : -len(KG_EDGE_FENCE_CLOSE)]
+    assert KG_EDGE_FENCE_OPEN not in inner
+    assert "[FENCE]" in inner
+
+
+def test_fence_kg_edge_for_llm_strips_bidi() -> None:
+    out = fence_kg_edge_for_llm("kn" + chr(0x202E) + "ows")
+    assert out == f"{KG_EDGE_FENCE_OPEN}knows{KG_EDGE_FENCE_CLOSE}"
+
+
+# ---------------------------------------------------------------------------
+# Cross-family neutralization: every wrapper neutralizes ALL twelve markers
+# ---------------------------------------------------------------------------
+
+
+_ALL_TWELVE_MARKERS = (
+    LLM_FENCE_OPEN,
+    LLM_FENCE_CLOSE,
+    URL_FENCE_OPEN,
+    URL_FENCE_CLOSE,
+    URL_BODY_FENCE_OPEN,
+    URL_BODY_FENCE_CLOSE,
+    ENTITY_FENCE_OPEN,
+    ENTITY_FENCE_CLOSE,
+    KG_NODE_FENCE_OPEN,
+    KG_NODE_FENCE_CLOSE,
+    KG_EDGE_FENCE_OPEN,
+    KG_EDGE_FENCE_CLOSE,
+)
+
+
+def _body_with_every_marker() -> str:
+    """A body that crams every fence marker into one string. Used to
+    prove no marker can survive into a foreign fence's interior."""
+
+    return "head " + " ".join(_ALL_TWELVE_MARKERS) + " tail"
+
+
+def _inner_block(out: str, open_marker: str, close_marker: str) -> str:
+    """Return the content between the outer fence markers regardless of
+    whether the wrapper uses newline-shape or single-line shape."""
+
+    assert out.startswith(open_marker), out
+    assert out.endswith(close_marker), out
+    return out[len(open_marker) : -len(close_marker)]
+
+
+def test_fence_for_llm_neutralizes_all_twelve_markers() -> None:
+    out = fence_for_llm(_body_with_every_marker())
+    inner = _inner_block(out, LLM_FENCE_OPEN + "\n", "\n" + LLM_FENCE_CLOSE)
+    for marker in _ALL_TWELVE_MARKERS:
+        assert marker not in inner, marker
+
+
+def test_fence_url_body_for_llm_neutralizes_all_twelve_markers() -> None:
+    out = fence_url_body_for_llm(_body_with_every_marker())
+    inner = _inner_block(out, URL_BODY_FENCE_OPEN + "\n", "\n" + URL_BODY_FENCE_CLOSE)
+    for marker in _ALL_TWELVE_MARKERS:
+        assert marker not in inner, marker
+
+
+def test_fence_entity_for_llm_neutralizes_all_twelve_markers() -> None:
+    body = _body_with_every_marker()
+    out = fence_entity_for_llm(body)
+    assert out is not None
+    inner = _inner_block(out, ENTITY_FENCE_OPEN, ENTITY_FENCE_CLOSE)
+    for marker in _ALL_TWELVE_MARKERS:
+        assert marker not in inner, marker
+
+
+def test_fence_kg_node_for_llm_neutralizes_all_twelve_markers() -> None:
+    out = fence_kg_node_for_llm(_body_with_every_marker())
+    inner = _inner_block(out, KG_NODE_FENCE_OPEN, KG_NODE_FENCE_CLOSE)
+    for marker in _ALL_TWELVE_MARKERS:
+        assert marker not in inner, marker
+
+
+def test_fence_kg_edge_for_llm_neutralizes_all_twelve_markers() -> None:
+    out = fence_kg_edge_for_llm(_body_with_every_marker())
+    inner = _inner_block(out, KG_EDGE_FENCE_OPEN, KG_EDGE_FENCE_CLOSE)
+    for marker in _ALL_TWELVE_MARKERS:
+        assert marker not in inner, marker
+
+
+def test_fence_url_for_llm_neutralizes_new_families() -> None:
+    """``fence_url_for_llm`` already existed; now that the four new
+    families joined ``_ALL_FENCES``, a URL whose path embeds e.g. the
+    ``KG_NODE`` marker must also be neutralized."""
+
+    crafted = f"https://example.com/{KG_NODE_FENCE_OPEN}/{ENTITY_FENCE_OPEN}"
+    out = fence_url_for_llm(crafted)
+    assert out is not None
+    inner = _inner_block(out, URL_FENCE_OPEN, URL_FENCE_CLOSE)
+    assert KG_NODE_FENCE_OPEN not in inner
+    assert ENTITY_FENCE_OPEN not in inner
+    assert "[FENCE]" in inner
+
+
+def test_fence_for_llm_neutralizes_new_families_inside_tweet_body() -> None:
+    body = f"a {URL_BODY_FENCE_OPEN} b {KG_EDGE_FENCE_CLOSE} c"
+    out = fence_for_llm(body)
+    inner = "\n".join(out.split("\n")[1:-1])
+    assert URL_BODY_FENCE_OPEN not in inner
+    assert KG_EDGE_FENCE_CLOSE not in inner
