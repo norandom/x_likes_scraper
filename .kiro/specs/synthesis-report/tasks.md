@@ -182,7 +182,7 @@
   - _Depends: 3.2, 5.1_
 
 - [ ] 6. Validation: end-to-end coverage of the integrated feature
-- [ ] 6.1 End-to-end orchestrator test with the autouse blockers in place
+- [x] 6.1 End-to-end orchestrator test with the autouse blockers in place
   - Drive `run_report` from a synthetic in-memory index across all three shapes with the FakeDspyLM and the URL-fetch blocker active
   - Assert that `hops=1` issues exactly one index search, `hops=2` issues exactly K parallel round-2 searches, and `fetch_urls=False` never instantiates the fetcher
   - Assert that the returned markdown is sanitized and that every claim cites a known source ID
