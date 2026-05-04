@@ -75,7 +75,7 @@
   - _Requirements: 5.1, 5.2_
   - _Boundary: entities_
 
-- [ ] 2.5 (P) Build the depth-capped mermaid mindmap renderer
+- [x] 2.5 (P) Build the depth-capped mermaid mindmap renderer
   - Generate a mermaid `mindmap` block whose root is the user query and whose level-1 children are the entity categories present in the KG (Authors, Sources, Themes, Hashtags) — only categories with non-empty children are emitted
   - Cap the rendered depth at the documented maximum (4) so GitHub, Obsidian, and VS Code preview render legibly
   - Filter node labels to the safe character subset before emission so mermaid's parser never trips on quotes, brackets, slashes, or `@` / `:`
