@@ -37,12 +37,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 from . import server, tools
 from .config import ConfigError, load_config
 from .errors import ToolError
 from .index import IndexError, TweetIndex
+
+
+_TCO_RE = re.compile(r"https?://t\.co/\S+")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -99,9 +103,52 @@ def _print_init_summary(index: TweetIndex) -> None:
     print(f"  corpus_matrix    : {rows} rows x {dims} dims", file=sys.stderr)
 
 
+def _expand_snippet(snippet: str, urls: list[str]) -> str:
+    """Strip ``t.co`` shortlinks from the snippet and append the resolved
+    URLs the export already captured in ``Tweet.urls``.
+
+    The export does not preserve a positional ``t.co`` -> ``expanded_url``
+    map, so we cannot do an in-place substitution. Stripping the opaque
+    tokens and listing the resolved targets after the prose keeps the
+    snippet readable and makes the destinations visible.
+    """
+
+    cleaned = _TCO_RE.sub("", snippet)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    real_urls = [u for u in urls if u]
+    if not real_urls:
+        return cleaned
+    if cleaned:
+        return cleaned + "  " + " ".join(real_urls)
+    return " ".join(real_urls)
+
+
+def _format_meta_line(
+    i: int,
+    hit: dict,
+    *,
+    color: bool,
+) -> str:
+    parts = [
+        f"score={hit['score']:.2f}",
+        f"wr={hit['walker_relevance']:.2f}",
+        hit["year_month"] or "?",
+        f"@{hit['handle'] or '?'}",
+        f"id={hit['tweet_id']}",
+    ]
+    sep = " │ "
+    body = sep.join(parts)
+    prefix = f"{i:>2}."
+    if color:
+        # Dim the metadata so the snippet on the next line stands out.
+        return f"\x1b[1m{prefix}\x1b[0m \x1b[2m{body}\x1b[0m"
+    return f"{prefix} {body}"
+
+
 def _print_search_results(
     hits: list[dict],
     *,
+    index: TweetIndex,
     json_out: bool,
 ) -> None:
     if json_out:
@@ -113,20 +160,19 @@ def _print_search_results(
         print("(no hits)", file=sys.stderr)
         return
 
+    color = sys.stdout.isatty()
+
     for i, hit in enumerate(hits, 1):
-        score = hit["score"]
-        wr = hit["walker_relevance"]
-        ym = hit["year_month"] or "?"
-        handle = hit["handle"] or "?"
-        snippet = hit["snippet"].replace("\n", " ")
-        print(
-            f"{i:>2}. [score={score:.3f} wr={wr:.2f}] {ym} @{handle} "
-            f"({hit['tweet_id']})"
-        )
+        tweet = index.tweets_by_id.get(hit["tweet_id"])
+        urls = list(tweet.urls) if tweet is not None else []
+        snippet = _expand_snippet(hit["snippet"].replace("\n", " "), urls)
+
+        print(_format_meta_line(i, hit, color=color))
         print(f"    {snippet}")
         why = hit.get("why") or ""
         if why:
             print(f"    why: {why}")
+        print()
 
 
 def _run_search(index: TweetIndex, args: argparse.Namespace) -> int:
@@ -144,7 +190,11 @@ def _run_search(index: TweetIndex, args: argparse.Namespace) -> int:
         return 2
 
     limit = max(0, args.limit)
-    _print_search_results(results[:limit], json_out=args.json_out)
+    _print_search_results(
+        results[:limit],
+        index=index,
+        json_out=args.json_out,
+    )
     return 0
 
 
