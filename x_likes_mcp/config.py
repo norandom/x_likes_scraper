@@ -140,15 +140,6 @@ def _resolve_env(
     return merged
 
 
-def _require(env: dict[str, str], name: str) -> str:
-    """Return ``env[name]`` after asserting it is set and non-empty."""
-
-    value = env.get(name, "")
-    if value is None or value == "":
-        raise ConfigError(f"Missing required environment variable: {name}")
-    return value
-
-
 def load_config(
     env_path: Path | None = None,
     env: dict[str, str] | None = None,
