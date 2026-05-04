@@ -7,7 +7,8 @@ Boot sequence:
      or load the cached :class:`TweetTree`, load the export, precompute
      author affinity.
   3. ``server.run(index)`` — drive the stdio MCP loop until the client
-     disconnects (skipped under ``--init`` / ``--search``).
+     disconnects (skipped under ``--init`` / ``--search`` / ``--report``
+     / ``--report-optimize``).
   4. Return ``0`` on clean shutdown.
 
 Startup-error handling:
@@ -31,6 +32,24 @@ CLI flags:
   exit. Mutually exclusive with ``--init``. Filter flags (``--year``,
   ``--month-start``, ``--month-end``), ``--with-why``, ``--limit``, and
   ``--json`` shape the query and the output.
+
+  ``--report {brief,synthesis,trend} --query Q``: drive the
+  synthesis-report orchestrator and write the rendered markdown to
+  ``--out PATH`` (or stdout when ``--out`` is omitted). ``--fetch-urls``
+  enables the crawl4ai container probe + URL fetch path; ``--hops``
+  picks 1- or 2-hop search. Filter flags (``--year``, ``--month-start``,
+  ``--month-end``, ``--limit``) are honored. Mutually exclusive with
+  ``--init`` / ``--search`` / ``--report-optimize``. Exits ``2`` on any
+  orchestrator failure (LM unreachable, crawl4ai unreachable while
+  ``--fetch-urls`` was set, malformed shape, synthesis-validation
+  error, missing ``--query``).
+
+  ``--report-optimize {brief,synthesis,trend}``: read labeled demos
+  from ``<output_dir>/synthesis_labeled/<shape>.json`` and run the
+  DSPy optimizer (``BootstrapFewShot``) for that shape. The compiled
+  program lands in ``<output_dir>/synthesis_compiled/``. Mutually
+  exclusive with the other modes; exits ``2`` on any optimizer or
+  I/O failure.
 """
 
 from __future__ import annotations
@@ -46,6 +65,11 @@ from .config import ConfigError, load_config
 from .errors import ToolError
 from .index import IndexError, TweetIndex
 from .sanitize import safe_http_url, sanitize_text
+from .synthesis import compiled, orchestrator
+from .synthesis.compiled import LabeledExample
+from .synthesis.orchestrator import OrchestratorError
+from .synthesis.shapes import ReportShape, parse_report_shape
+from .synthesis.types import ReportOptions
 
 _TCO_RE = re.compile(r"https?://t\.co/\S+")
 _TWEET_ID_RE = re.compile(r"^[0-9]+$")
@@ -89,6 +113,53 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Run the hybrid search_likes pipeline against QUERY and print "
             "the ranked hits. Skips the stdio MCP loop."
         ),
+    )
+    mode.add_argument(
+        "--report",
+        choices=[shape.value for shape in ReportShape],
+        default=None,
+        help=(
+            "Run the synthesis-report orchestrator for the given shape "
+            "(brief, synthesis, trend) and print or write the rendered "
+            "markdown. Requires --query."
+        ),
+    )
+    mode.add_argument(
+        "--report-optimize",
+        choices=[shape.value for shape in ReportShape],
+        default=None,
+        dest="report_optimize",
+        help=(
+            "Run the DSPy optimizer for the given report shape, reading "
+            "labeled demos from output/synthesis_labeled/<shape>.json and "
+            "writing the compiled program to output/synthesis_compiled/."
+        ),
+    )
+    parser.add_argument(
+        "--query",
+        default=None,
+        help="Synthesis query string for --report / --report-optimize modes.",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Write the rendered report to this path (default: stdout).",
+    )
+    parser.add_argument(
+        "--fetch-urls",
+        action="store_true",
+        dest="fetch_urls",
+        help=(
+            "Allow the synthesis-report orchestrator to fetch URLs cited "
+            "in the recalled tweets via the configured crawl4ai container."
+        ),
+    )
+    parser.add_argument(
+        "--hops",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Number of search hops the synthesis-report orchestrator runs (default: 1).",
     )
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month-start", default=None, dest="month_start")
@@ -205,6 +276,158 @@ def _print_search_results(
         print()
 
 
+def _run_report(index: TweetIndex, args: argparse.Namespace) -> int:
+    """Build :class:`ReportOptions`, drive the orchestrator, write markdown.
+
+    Returns ``0`` on success, ``2`` on any failure (LM unreachable,
+    crawl4ai unreachable while ``--fetch-urls`` was set, malformed shape,
+    synthesis-validation error, missing ``--query``).
+    """
+
+    query = (args.query or "").strip()
+    if not query:
+        print(
+            "x_likes_mcp: --report requires --query (the synthesis query string)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        shape = parse_report_shape(args.report)
+    except ValueError as exc:  # pragma: no cover - argparse pre-filters this.
+        print(f"x_likes_mcp: invalid report shape: {exc}", file=sys.stderr)
+        return 2
+
+    options = ReportOptions(
+        query=query,
+        shape=shape,
+        fetch_urls=bool(args.fetch_urls),
+        hops=int(args.hops),
+        year=args.year,
+        month_start=args.month_start,
+        month_end=args.month_end,
+        limit=int(args.limit),
+    )
+
+    try:
+        result = orchestrator.run_report(index, options, config=index.config)
+    except OrchestratorError as exc:
+        print(
+            f"x_likes_mcp: report failed [{exc.category}]: {exc.message}",
+            file=sys.stderr,
+        )
+        return 2
+
+    markdown = result.markdown
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(markdown, encoding="utf-8")
+    else:
+        # ``print`` adds a trailing newline; ``markdown`` typically already
+        # ends with one. Use ``sys.stdout.write`` so we don't double up.
+        sys.stdout.write(markdown)
+        if not markdown.endswith("\n"):
+            sys.stdout.write("\n")
+
+    return 0
+
+
+def _run_report_optimize(index: TweetIndex, args: argparse.Namespace) -> int:
+    """Run the DSPy optimizer for the requested report shape.
+
+    Reads labeled demos from
+    ``<output_dir>/synthesis_labeled/<shape>.json`` (a JSON list of
+    ``{"query", "fenced_context_raw", "expected_outputs"}`` records) and
+    writes the compiled program to ``<output_dir>/synthesis_compiled/``
+    via :func:`compiled.run_optimizer`. Sanitization and fencing of
+    each demo happens inside :func:`compiled.prepare_demo`, which
+    ``run_optimizer`` invokes per example.
+
+    Returns ``0`` on success, ``2`` on any failure (missing labeled
+    file, malformed JSON, optimizer exception).
+    """
+
+    try:
+        shape = parse_report_shape(args.report_optimize)
+    except ValueError as exc:  # pragma: no cover - argparse pre-filters this.
+        print(f"x_likes_mcp: invalid report shape: {exc}", file=sys.stderr)
+        return 2
+
+    output_dir = index.config.output_dir
+    labeled_path = output_dir / "synthesis_labeled" / f"{shape.value}.json"
+    if not labeled_path.exists():
+        print(
+            "x_likes_mcp: --report-optimize requires labeled examples at "
+            f"{labeled_path} (a JSON list of {{query, fenced_context_raw, "
+            "expected_outputs}} records)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        raw = json.loads(labeled_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"x_likes_mcp: failed to read labeled examples at {labeled_path}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not isinstance(raw, list):
+        print(
+            f"x_likes_mcp: labeled examples at {labeled_path} must be a JSON list",
+            file=sys.stderr,
+        )
+        return 2
+
+    examples: list[LabeledExample] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            print(
+                f"x_likes_mcp: labeled example #{i} in {labeled_path} is not an object",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            examples.append(
+                LabeledExample(
+                    query=str(entry["query"]),
+                    fenced_context_raw=str(entry["fenced_context_raw"]),
+                    expected_outputs=dict(entry.get("expected_outputs") or {}),
+                )
+            )
+        except KeyError as exc:
+            print(
+                f"x_likes_mcp: labeled example #{i} in {labeled_path} is "
+                f"missing required field {exc}",
+                file=sys.stderr,
+            )
+            return 2
+
+    compiled_root = output_dir / "synthesis_compiled"
+    try:
+        compiled.run_optimizer(
+            shape,
+            examples,
+            root=compiled_root,
+            optimizer="BootstrapFewShot",
+        )
+    except Exception as exc:
+        print(
+            f"x_likes_mcp: optimizer failed for shape {shape.value}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(
+        f"x_likes_mcp: optimizer wrote compiled program to "
+        f"{compiled_root / f'{shape.value}.json'}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _run_search(index: TweetIndex, args: argparse.Namespace) -> int:
     try:
         results = tools.search_likes(
@@ -253,6 +476,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.search is not None:
         return _run_search(index, args)
+
+    if args.report is not None:
+        return _run_report(index, args)
+
+    if args.report_optimize is not None:
+        return _run_report_optimize(index, args)
 
     try:
         server.run(index)

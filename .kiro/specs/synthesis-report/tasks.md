@@ -171,7 +171,7 @@
   - _Boundary: server_
   - _Depends: 5.2_
 
-- [ ] 5.4 Add the CLI `--report` mode
+- [x] 5.4 Add the CLI `--report` mode
   - Extend the existing argparse setup with `--report {brief,synthesis,trend}`, `--query`, `--out`, `--fetch-urls`, `--hops`, and `--report-optimize`, sharing `--limit`, `--year`, `--month-start`, and `--month-end` with the existing search mode
   - Build `ReportOptions` from the parsed args, call the orchestrator, and write the resulting markdown to `--out` or to stdout when `--out` is omitted
   - Wire `--report-optimize` to the compiled-program optimizer entry point so the operator can refresh the per-shape compiled program from the labeled-example set
