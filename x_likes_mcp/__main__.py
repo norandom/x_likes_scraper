@@ -45,6 +45,7 @@ from . import server, tools
 from .config import ConfigError, load_config
 from .errors import ToolError
 from .index import IndexError, TweetIndex
+from .sanitize import safe_http_url, sanitize_text
 
 
 _TCO_RE = re.compile(r"https?://t\.co/\S+")
@@ -130,15 +131,17 @@ def _expand_snippet(snippet: str, urls: list[str]) -> str:
     """Strip ``t.co`` shortlinks from the snippet and append the resolved
     URLs the export already captured in ``Tweet.urls``.
 
-    The export does not preserve a positional ``t.co`` -> ``expanded_url``
-    map, so we cannot do an in-place substitution. Stripping the opaque
-    tokens and listing the resolved targets after the prose keeps the
-    snippet readable and makes the destinations visible.
+    Both the snippet and each URL are passed through
+    :func:`sanitize_text` so terminal-control / BiDi tricks in tweet
+    content cannot reach the user's screen. URLs are additionally
+    filtered with :func:`safe_http_url` to ``http://`` / ``https://``
+    only — anything else (``javascript:``, ``data:``, ``file://``, or a
+    URL that turned into garbage after sanitization) is dropped.
     """
 
-    cleaned = _TCO_RE.sub("", snippet)
+    cleaned = _TCO_RE.sub("", sanitize_text(snippet))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    real_urls = [u for u in urls if u]
+    real_urls = [u for u in (safe_http_url(raw) for raw in urls) if u]
     if not real_urls:
         return cleaned
     if cleaned:

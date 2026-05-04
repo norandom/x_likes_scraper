@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import errors
 from . import walker as walker_module
+from .sanitize import sanitize_text
 from .tree import TweetTree
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -198,6 +199,13 @@ def _shape_hit(index: TweetIndex, hit: Any) -> dict[str, Any]:
     else:
         handle = ""
         snippet = ""
+
+    # Untrusted tweet content reaches the calling LLM through this hit.
+    # Strip ANSI / control / BiDi codepoints so terminal-control or
+    # rendering-direction tricks cannot survive the trip. NFKC
+    # normalization runs as part of sanitize_text.
+    handle = sanitize_text(handle)
+    snippet = sanitize_text(snippet)
 
     walker_relevance = max(0.0, min(1.0, float(hit.walker_relevance)))
 
@@ -452,11 +460,14 @@ def read_tweet(index: TweetIndex, tweet_id: str) -> dict[str, Any]:
     handle = user.screen_name if user is not None else ""
     display_name = user.name if user is not None else ""
 
+    # Sanitize every string field that originates from arbitrary X users
+    # before handing it back to the MCP client (which is typically an
+    # LLM): strip ANSI / control / BiDi / BOM and run NFKC normalization.
     candidates: list[tuple[str, Any]] = [
         ("tweet_id", tweet.id),
-        ("handle", handle),
-        ("display_name", display_name),
-        ("text", tweet.text),
+        ("handle", sanitize_text(handle)),
+        ("display_name", sanitize_text(display_name)),
+        ("text", sanitize_text(tweet.text)),
         ("created_at", tweet.created_at),
         ("view_count", tweet.view_count),
         ("like_count", tweet.favorite_count),
