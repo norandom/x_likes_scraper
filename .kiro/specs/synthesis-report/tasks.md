@@ -102,7 +102,7 @@
   - _Boundary: compiled_
 
 - [ ] 4. Pipeline modules: context assembly, fetcher, multihop, and report renderer
-- [ ] 4.1 Assemble the fenced synthesis context with per-source caps and a total-budget enforcer
+- [x] 4.1 Assemble the fenced synthesis context with per-source caps and a total-budget enforcer
   - Build the fenced blob by sanitizing and fencing each tweet body, fetched URL link, fetched URL body, entity string, KG node label, and KG edge caption with the matching marker family
   - Apply per-source byte caps (defaults `per_tweet_bytes=280`, `per_url_body_bytes=4096`, `per_entity_bytes=64`, `per_kg_label_bytes=64`) before fencing so a single huge source cannot crowd out the rest
   - Enforce a total context budget (default `total_bytes=32768`) by dropping the lowest-rank URL bodies first, then the lowest-rank tweets, until the assembled blob fits; never drop the system prompt or the user query
