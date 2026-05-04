@@ -33,7 +33,7 @@
   - _Requirements: 1.2, 1.3, 2.4, 8.2_
   - _Boundary: synthesis package public surface_
 
-- [ ] 1.5 Stand up the synthesis test scaffolding
+- [x] 1.5 Stand up the synthesis test scaffolding
   - Add a per-package `conftest.py` under `tests/mcp/synthesis/` that autouse-blocks real URL fetching and real DSPy LM calls
   - Provide a `FakeDspyLM` that returns canned responses keyed by signature name and input hash so signature tests stay offline
   - Reserve a `real_lm` pytest marker that is collected only when an explicit opt-in flag is passed
