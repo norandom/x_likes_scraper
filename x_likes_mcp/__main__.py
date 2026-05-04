@@ -39,6 +39,7 @@ import argparse
 import json
 import re
 import sys
+from pathlib import Path
 
 from . import server, tools
 from .config import ConfigError, load_config
@@ -47,6 +48,19 @@ from .index import IndexError, TweetIndex
 
 
 _TCO_RE = re.compile(r"https?://t\.co/\S+")
+
+
+def _local_media_files(tweet_id: str, media_dir: Path) -> list[Path]:
+    """Return downloaded media files for ``tweet_id`` under ``media_dir``.
+
+    The exporter writes media as ``<tweet_id>_<index>.<ext>``. We glob
+    instead of trusting ``Tweet.media[i].local_path`` because the export
+    leaves that field unpopulated for older runs.
+    """
+
+    if not media_dir.is_dir():
+        return []
+    return sorted(media_dir.glob(f"{tweet_id}_*"))
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -161,6 +175,7 @@ def _print_search_results(
         return
 
     color = sys.stdout.isatty()
+    media_dir = (index.config.output_dir / "media").resolve()
 
     for i, hit in enumerate(hits, 1):
         tweet = index.tweets_by_id.get(hit["tweet_id"])
@@ -169,6 +184,8 @@ def _print_search_results(
 
         print(_format_meta_line(i, hit, color=color))
         print(f"    {snippet}")
+        for path in _local_media_files(hit["tweet_id"], media_dir):
+            print(f"    media: file://{path}")
         why = hit.get("why") or ""
         if why:
             print(f"    why: {why}")
