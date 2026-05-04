@@ -48,6 +48,7 @@ from .index import IndexError, TweetIndex
 
 
 _TCO_RE = re.compile(r"https?://t\.co/\S+")
+_TWEET_ID_RE = re.compile(r"^[0-9]+$")
 
 
 def _local_media_files(tweet_id: str, media_dir: Path) -> list[Path]:
@@ -56,9 +57,17 @@ def _local_media_files(tweet_id: str, media_dir: Path) -> list[Path]:
     The exporter writes media as ``<tweet_id>_<index>.<ext>``. We glob
     instead of trusting ``Tweet.media[i].local_path`` because the export
     leaves that field unpopulated for older runs.
+
+    ``tweet_id`` is validated against ``^[0-9]+$`` before being
+    interpolated into the glob pattern. Twitter IDs are always numeric;
+    rejecting anything else stops a malformed/malicious id (e.g. one
+    containing ``..`` or ``/``) from escaping ``media_dir`` via
+    ``Path.glob``'s literal handling of those tokens.
     """
 
     if not media_dir.is_dir():
+        return []
+    if not _TWEET_ID_RE.match(tweet_id):
         return []
     return sorted(media_dir.glob(f"{tweet_id}_*"))
 
