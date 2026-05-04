@@ -34,6 +34,7 @@ from .tree import TweetTree
 if TYPE_CHECKING:  # pragma: no cover
     from .index import TweetIndex
     from .ranker import ScoredHit
+    from .synthesis.orchestrator import OrchestratorError
     from .walker import WalkerHit
 
 
@@ -518,3 +519,233 @@ def read_tweet(index: TweetIndex, tweet_id: str) -> dict[str, Any]:
         ("url", _tweet_url(tweet)),
     ]
     return {key: value for key, value in candidates if value}
+
+
+# ---------------------------------------------------------------------------
+# synthesize_likes
+#
+# The synthesis pieces are exposed via a lazy module-level ``__getattr__``
+# rather than top-level imports. The package exposes a circular chain
+# ``tools → synthesis.orchestrator → synthesis.report_render →
+# tools._build_status_url``: an eager top-level import here would deadlock
+# whenever a caller imports ``synthesis.orchestrator`` before ``tools``
+# (e.g. the orchestrator's own test module). Routing ``run_report``,
+# ``OrchestratorError``, ``parse_report_shape``, and ``ReportOptions``
+# through ``__getattr__`` defers the import to first attribute access,
+# by which point both modules are fully loaded.
+#
+# The test seam ``monkeypatch.setattr(tools, "run_report", stub)`` still
+# works: ``getattr(tools, "run_report")`` triggers ``__getattr__`` (which
+# resolves and caches the real function on the module dict), and the
+# subsequent ``setattr`` overrides that cached binding for the duration
+# of the test.
+
+
+_LAZY_SYNTHESIS_ATTRS: frozenset[str] = frozenset(
+    {"run_report", "OrchestratorError", "parse_report_shape", "ReportOptions"}
+)
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy resolver for the synthesis-report imports.
+
+    Breaks the import cycle described above. Only the four names listed
+    in :data:`_LAZY_SYNTHESIS_ATTRS` are resolved here; any other unknown
+    attribute raises :class:`AttributeError` per the standard module
+    semantics (PEP 562). Imports are spelled inline (no ``importlib``
+    indirection) so static analysers can see the full module path and
+    treat the call as a closed-set load rather than a dynamic one.
+    """
+
+    if name not in _LAZY_SYNTHESIS_ATTRS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    if name in ("run_report", "OrchestratorError"):
+        from .synthesis import orchestrator as _orchestrator
+
+        value = getattr(_orchestrator, name)
+    elif name == "parse_report_shape":
+        from .synthesis.shapes import parse_report_shape as _parse_report_shape
+
+        value = _parse_report_shape
+    else:  # name == "ReportOptions"
+        from .synthesis.types import ReportOptions as _ReportOptions
+
+        value = _ReportOptions
+
+    # Cache on the module dict so subsequent lookups skip ``__getattr__``
+    # and stay monkeypatch-compatible.
+    globals()[name] = value
+    return value
+
+
+# MCP tool boundary for the synthesis-report feature. The handler validates
+# inputs at the MCP edge, builds a :class:`ReportOptions`, defers all heavy
+# lifting to :func:`x_likes_mcp.synthesis.orchestrator.run_report`, and
+# translates :class:`OrchestratorError` envelopes into the structured
+# ``ToolError`` categories the MCP server boundary surfaces.
+#
+# Defaults pin the safe path:
+#   * ``fetch_urls=False`` — Req 4.7 / 10.3: the MCP boundary never reaches
+#     the crawl4ai container unless the caller explicitly opts in. The
+#     orchestrator owns the actual probe / fetch gating; this default is
+#     the documented contract the MCP schema layer pins for callers.
+#   * ``hops=1`` — Req 2.4: single-hop search by default; ``hops=2`` opts
+#     into a round-2 fan-out.
+#
+# Error mapping (per design.md ``MCP API contract``):
+#   * orchestrator ``invalid_input`` → ``errors.invalid_input``
+#   * orchestrator ``config``       → ``errors.upstream_failure``
+#   * orchestrator ``upstream``     → ``errors.upstream_failure``
+#   * orchestrator ``validation``   → ``errors.upstream_failure`` (the
+#     synthesizer hallucinated unknown source IDs after a corrective
+#     retry; the caller can retry transparently)
+#
+# The empty-corpus case (Req 9.4) is *not* translated into ``not_found``:
+# the orchestrator returns a normal :class:`ReportResult` whose markdown
+# body announces "no matching tweets". The tool boundary returns the
+# documented success envelope so the response shape stays pinned at
+# ``{markdown, shape, used_hops, fetched_url_count}`` for empty and
+# non-empty corpora alike (design ``MCP API contract``).
+
+
+def synthesize_likes(
+    index: TweetIndex,
+    query: str,
+    report_shape: str,
+    fetch_urls: bool = False,
+    hops: int = 1,
+    year: int | None = None,
+    month_start: str | None = None,
+    month_end: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Run the synthesis-report orchestrator and return the rendered envelope.
+
+    Pipeline:
+      1. Validate ``query`` (non-empty after strip / sanitize) and
+         ``report_shape`` (one of the three :class:`ReportShape` values).
+         Both are rejected at the MCP boundary before any orchestrator,
+         search, or LM call (Req 1.3 / 10.4).
+      2. Build a :class:`ReportOptions` and call
+         :func:`run_report` with ``config=index.config``.
+      3. Translate :class:`OrchestratorError` by category into the
+         structured ``ToolError`` envelope the MCP server surfaces.
+
+    Args:
+        index: The loaded :class:`TweetIndex`. The orchestrator reads
+            ``tweets_by_id`` and the search seam off this; we only read
+            ``index.config`` directly.
+        query: User query; validated, stripped, must be non-empty.
+        report_shape: One of ``"brief"``, ``"synthesis"``, ``"trend"``.
+        fetch_urls: When ``True``, the orchestrator probes the crawl4ai
+            container and fetches resolved URLs; the MCP default is
+            ``False`` so a typical call performs zero outbound HTTP
+            beyond the LM endpoint (Req 4.7 / 10.3).
+        hops: ``1`` (default) or ``2``; ``2`` enables round-2 fan-out.
+        year, month_start, month_end: Optional structured filter; same
+            shape as :func:`search_likes`.
+        limit: Per-round search limit; defaults to 50.
+
+    Returns:
+        ``{"markdown", "shape", "used_hops", "fetched_url_count"}``.
+
+    Raises:
+        ToolError: ``invalid_input`` for bad shape / query / orchestrator
+            input failures; ``upstream_failure`` for config / upstream /
+            validation orchestrator failures.
+    """
+
+    # 1) Boundary validation -------------------------------------------------
+    stripped_query = _validate_query(query)
+
+    # The synthesis names go through the module-level lazy ``__getattr__``
+    # to dodge the import cycle (see the lazy-import comment above). We
+    # look them up off ``sys.modules[__name__]`` so the lazy resolver
+    # fires on first call and the test seam can monkeypatch
+    # ``tools.run_report`` directly.
+    _self = sys.modules[__name__]
+    _parse_report_shape = _self.parse_report_shape
+    _ReportOptions = _self.ReportOptions
+    _run_report = _self.run_report
+    _OrchestratorError = _self.OrchestratorError
+
+    try:
+        parsed_shape = _parse_report_shape(report_shape)
+    except ValueError as exc:
+        raise errors.invalid_input("report_shape", str(exc)) from exc
+
+    # 2) Build orchestrator options -----------------------------------------
+    options = _ReportOptions(
+        query=stripped_query,
+        shape=parsed_shape,
+        fetch_urls=fetch_urls,
+        hops=hops,
+        year=year,
+        month_start=month_start,
+        month_end=month_end,
+        limit=limit,
+    )
+
+    # 3) Drive the orchestrator and translate failures ---------------------
+    try:
+        result = _run_report(index, options, config=index.config)
+    except _OrchestratorError as exc:
+        raise _translate_orchestrator_error(exc) from exc
+
+    # 4) Return the documented success envelope -----------------------------
+    return {
+        "markdown": result.markdown,
+        # ``ReportShape`` is a ``StrEnum``; expose the plain string value
+        # so MCP clients receive a stable ``"brief" | "synthesis" |
+        # "trend"`` instead of an enum repr.
+        "shape": str(result.shape.value),
+        "used_hops": result.used_hops,
+        "fetched_url_count": result.fetched_url_count,
+    }
+
+
+def _translate_orchestrator_error(exc: OrchestratorError) -> errors.ToolError:
+    """Map an :class:`OrchestratorError` category to a :class:`ToolError`.
+
+    The MCP boundary collapses ``config`` / ``upstream`` / ``validation``
+    into ``upstream_failure`` because every one of those cases is
+    something the caller can retry without fixing the request shape.
+    Validation gets a ``"synthesis validation failed: ..."`` prefix so
+    operators can tell synthesizer hallucinations apart from an
+    LM-down or config-missing surface.
+    """
+
+    if exc.category == "invalid_input":
+        return errors.invalid_input(_orchestrator_field(exc.message), exc.message)
+    if exc.category == "validation":
+        return errors.upstream_failure(f"synthesis validation failed: {exc.message}")
+    # ``config`` and ``upstream`` map directly. Any unrecognized
+    # category from a future orchestrator change collapses to
+    # ``upstream_failure`` rather than crashing the boundary — the
+    # alternative would be to leak the bare exception, which the MCP
+    # server would in turn surface as a generic 500.
+    return errors.upstream_failure(exc.message)
+
+
+def _orchestrator_field(message: str) -> str:
+    """Pick a sensible field name for an ``invalid_input`` orchestrator error.
+
+    The orchestrator reports invalid_input for unknown shapes (caught at
+    the boundary so we never reach this code path), out-of-range hops,
+    and non-positive years. The message itself names the offending
+    field; we sniff a small set of known prefixes so the surfaced
+    ``ToolError`` says ``invalid input for hops`` rather than
+    ``invalid input for input``.
+    """
+
+    lowered = message.lower()
+    if "hops" in lowered:
+        return "hops"
+    if "year" in lowered:
+        return "year"
+    if "shape" in lowered:
+        return "report_shape"
+    if "month" in lowered:
+        return "filter"
+    return "input"

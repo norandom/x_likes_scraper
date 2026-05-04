@@ -155,7 +155,7 @@
   - _Boundary: orchestrator_
   - _Depends: 2.4, 3.1, 3.2, 4.1, 4.2, 4.3, 4.4_
 
-- [ ] 5.2 Add the `synthesize_likes` MCP tool boundary
+- [x] 5.2 Add the `synthesize_likes` MCP tool boundary
   - Validate inputs (`query`, `report_shape`, optional `fetch_urls` defaulting to false, optional `hops` defaulting to 1, optional date filter fields) and reject unknown shape values with a structured `invalid_input` error before any search or LM call
   - Refuse to contact the crawl4ai endpoint when the caller did not pass `fetch_urls=true`, regardless of any other configuration
   - Translate orchestrator failures into `upstream_failure`, `invalid_input`, or `not_found` envelopes; on success return `{markdown, shape, used_hops, fetched_url_count}` with the markdown already sanitized by the renderer
