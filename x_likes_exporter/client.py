@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass
 from .cookies import CookieManager
 from .auth import XAuthenticator
-from .models import Tweet, User, Media
+from .models import Tweet
 from . import parser
 
 
