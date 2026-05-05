@@ -74,8 +74,46 @@ if TYPE_CHECKING:  # pragma: no cover - type-only imports
 
 __all__ = [
     "OrchestratorError",
+    "build_kg",
     "run_report",
 ]
+
+
+def build_kg(
+    query: str,
+    hits: list[ScoredHit],
+    index: TweetIndex,
+    *,
+    edge_kind: EdgeKind = EdgeKind.RECALL_FOR,
+    existing: KG | None = None,
+    dspy_fallback: bool = True,
+) -> KG:
+    """Construct or extend a KG seeded with ``query`` plus a tweet node per hit.
+
+    Public surface for callers that want the KG without running the full
+    synthesis pipeline (CLI ``--kg`` mode, downstream tools). Reuses the
+    same regex-first / DSPy-fallback entity extraction the orchestrator
+    runs internally so the graph is identical to what a synthesis pass
+    would build given the same hits.
+
+    When ``existing`` is supplied, the new hits are merged into that KG
+    in place (and the same instance is returned). The query root node
+    is added only when ``existing`` is ``None`` so a round-2 enrichment
+    call does not duplicate it.
+
+    ``dspy_fallback=False`` skips the DSPy fallback for hits where the
+    regex pass returned no entities. Hits with empty regex output simply
+    contribute no entity nodes. Used by the CLI ``--kg`` mode, which
+    must not call the LM.
+    """
+
+    kg = existing if existing is not None else KG()
+    if existing is None:
+        kg.add_node(Node(id=query_id(), kind=NodeKind.QUERY, label=query, weight=1.0))
+    _populate_kg_from_hits(
+        kg=kg, hits=hits, index=index, edge_kind=edge_kind, dspy_fallback=dspy_fallback
+    )
+    return kg
 
 
 # ---------------------------------------------------------------------------
@@ -331,11 +369,14 @@ def _populate_kg_from_hits(
     hits: list[ScoredHit],
     index: TweetIndex,
     edge_kind: EdgeKind,
+    dspy_fallback: bool = True,
 ) -> None:
     """Populate ``kg`` with one tweet node per hit plus its entities.
 
     Per design + Req 5.2, the regex extractor runs first; only the hits
     where the regex pass returned nothing trigger the DSPy fallback.
+    ``dspy_fallback=False`` short-circuits that fallback so the caller
+    can build the KG without an LM endpoint configured (CLI ``--kg``).
     """
 
     for hit in hits:
@@ -358,7 +399,7 @@ def _populate_kg_from_hits(
         # the DSPy fallback fires only when the regex pass returned
         # nothing for that hit.
         entities = extract_regex(text, [])
-        if not entities:
+        if not entities and dspy_fallback:
             entities = extract_entities(text)
 
         for entity in entities:

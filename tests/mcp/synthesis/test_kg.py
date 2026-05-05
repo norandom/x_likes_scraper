@@ -26,6 +26,7 @@ from x_likes_mcp.synthesis.kg import (
     handle_id,
     hashtag_id,
     query_id,
+    serialize_kg,
     tweet_id,
 )
 
@@ -271,3 +272,50 @@ class TestPersistence:
         after = sorted(p.name for p in tmp_path.iterdir())
         assert before == after
         assert before == []
+
+
+class TestSerialize:
+    def test_empty_kg_serializes_to_empty_collections(self) -> None:
+        payload = serialize_kg(KG())
+        assert payload == {"nodes": [], "edges": []}
+
+    def test_serialize_emits_nodes_sorted_by_id(self) -> None:
+        kg = KG()
+        kg.add_node(Node(id="tweet:2", kind=NodeKind.TWEET, label="t2", weight=1.0))
+        kg.add_node(Node(id="tweet:1", kind=NodeKind.TWEET, label="t1", weight=1.0))
+        kg.add_node(Node(id="handle:alice", kind=NodeKind.HANDLE, label="alice", weight=1.0))
+
+        payload = serialize_kg(kg)
+        ids = [n["id"] for n in payload["nodes"]]
+        assert ids == sorted(ids)
+        assert ids == ["handle:alice", "tweet:1", "tweet:2"]
+
+    def test_serialize_emits_edges_in_insertion_order(self) -> None:
+        kg = KG()
+        kg.add_node(Node(id="tweet:1", kind=NodeKind.TWEET, label="t1", weight=1.0))
+        kg.add_node(Node(id="handle:alice", kind=NodeKind.HANDLE, label="alice", weight=1.0))
+        kg.add_node(Node(id="handle:bob", kind=NodeKind.HANDLE, label="bob", weight=1.0))
+        kg.add_edge(Edge(src="tweet:1", dst="handle:alice", kind=EdgeKind.AUTHORED_BY))
+        kg.add_edge(Edge(src="tweet:1", dst="handle:bob", kind=EdgeKind.MENTIONS))
+
+        payload = serialize_kg(kg)
+        edge_dsts = [e["dst"] for e in payload["edges"]]
+        assert edge_dsts == ["handle:alice", "handle:bob"]
+        assert payload["edges"][0]["kind"] == "authored_by"
+        assert payload["edges"][1]["kind"] == "mentions"
+
+    def test_serialize_round_trips_node_fields(self) -> None:
+        kg = KG()
+        kg.add_node(Node(id="concept:foo", kind=NodeKind.CONCEPT, label="Foo Bar", weight=2.5))
+        node = serialize_kg(kg)["nodes"][0]
+        assert node == {
+            "id": "concept:foo",
+            "kind": "concept",
+            "label": "Foo Bar",
+            "weight": 2.5,
+        }
+
+    def test_serialize_is_deterministic_across_runs(self) -> None:
+        a = serialize_kg(_build_sample_kg())
+        b = serialize_kg(_build_sample_kg())
+        assert a == b

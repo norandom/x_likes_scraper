@@ -35,6 +35,7 @@ __all__ = [
     "handle_id",
     "hashtag_id",
     "query_id",
+    "serialize_kg",
     "tweet_id",
 ]
 
@@ -292,3 +293,33 @@ class KG:
             seen.add(dst_node.id)
             out.append(dst_node)
         return out
+
+
+def serialize_kg(kg: KG) -> dict[str, list[dict[str, object]]]:
+    """Return a JSON-friendly snapshot of ``kg``'s nodes and edges.
+
+    Shape::
+
+        {
+          "nodes": [{"id": "tweet:1", "kind": "tweet", "label": "...", "weight": 1.0}, ...],
+          "edges": [{"src": "query:root", "dst": "tweet:1", "kind": "recall_for"}, ...],
+        }
+
+    Determinism: nodes sort by id ascending; edges follow insertion order
+    (matches what ``add_edge`` records). Two builds on the same input
+    therefore produce byte-identical JSON.
+    """
+
+    nodes_payload: list[dict[str, object]] = [
+        {
+            "id": node.id,
+            "kind": str(node.kind.value),
+            "label": node.label,
+            "weight": node.weight,
+        }
+        for node in sorted(kg._nodes.values(), key=lambda n: n.id)
+    ]
+    edges_payload: list[dict[str, object]] = [
+        {"src": edge.src, "dst": edge.dst, "kind": str(edge.kind.value)} for edge in kg._edges
+    ]
+    return {"nodes": nodes_payload, "edges": edges_payload}

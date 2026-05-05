@@ -67,6 +67,14 @@ from .index import IndexError, TweetIndex
 from .sanitize import safe_http_url, sanitize_text
 from .synthesis import compiled, orchestrator
 from .synthesis.compiled import LabeledExample
+from .synthesis.kg import serialize_kg
+from .synthesis.mindmap import render_mindmap
+from .synthesis.multihop import (
+    HopsOutOfRange,
+    run_round_one,
+    run_round_two,
+    validate_hops,
+)
 from .synthesis.orchestrator import OrchestratorError
 from .synthesis.shapes import ReportShape, parse_report_shape
 from .synthesis.types import ReportOptions
@@ -133,6 +141,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Run the DSPy optimizer for the given report shape, reading "
             "labeled demos from output/synthesis_labeled/<shape>.json and "
             "writing the compiled program to output/synthesis_compiled/."
+        ),
+    )
+    mode.add_argument(
+        "--kg",
+        metavar="QUERY",
+        default=None,
+        help=(
+            "Run round-1 search (and round-2 fan-out when --hops 2), build "
+            "the in-memory knowledge graph, render it as a mermaid mindmap "
+            "(or JSON via --json), print to --out or stdout, exit. No LM "
+            "call, no URL fetch."
         ),
     )
     parser.add_argument(
@@ -428,6 +447,93 @@ def _run_report_optimize(index: TweetIndex, args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_kg(index: TweetIndex, args: argparse.Namespace) -> int:
+    """Build and dump the synthesis KG for ``args.kg`` (no LM, no fetch).
+
+    Pipeline: ``run_round_one`` → optional ``run_round_two`` (when
+    ``--hops 2``) → ``orchestrator.build_kg`` (regex entity pass with
+    DSPy fallback only for empty-regex hits) → render as mermaid mindmap
+    (default) or JSON (``--json``). Output goes to ``args.out`` or
+    stdout. Exit ``0`` on success, ``2`` on validation / search failure.
+    """
+
+    query = (args.kg or "").strip()
+    if not query:
+        print("x_likes_mcp: --kg requires a non-empty query", file=sys.stderr)
+        return 2
+
+    options = ReportOptions(
+        query=query,
+        shape=ReportShape.SYNTHESIS,  # placeholder — not consumed by KG path
+        fetch_urls=False,
+        hops=args.hops,
+        year=args.year,
+        month_start=args.month_start,
+        month_end=args.month_end,
+        limit=args.limit,
+    )
+
+    try:
+        validate_hops(options.hops, max_hops=index.config.synthesis_max_hops)
+    except HopsOutOfRange as exc:
+        print(f"x_likes_mcp: kg error: invalid_input: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        hits_round_one = run_round_one(index, options)
+    except ValueError as exc:
+        print(f"x_likes_mcp: kg error: invalid_input: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"x_likes_mcp: kg error: search failed: {exc}", file=sys.stderr)
+        return 2
+
+    if not hits_round_one:
+        print(
+            f"x_likes_mcp: kg: no matching tweets for {query!r}",
+            file=sys.stderr,
+        )
+        # Emit an empty mindmap / JSON shell so downstream consumers see
+        # a well-formed payload rather than nothing.
+        kg = orchestrator.build_kg(query, [], index, dspy_fallback=False)
+    else:
+        kg = orchestrator.build_kg(query, hits_round_one, index, dspy_fallback=False)
+        if options.hops >= 2:
+            try:
+                hits_round_two = run_round_two(
+                    index,
+                    options,
+                    kg,
+                    k=index.config.synthesis_round_two_k,
+                )
+            except Exception as exc:
+                print(f"x_likes_mcp: kg error: round-2 failed: {exc}", file=sys.stderr)
+                return 2
+            round_two_only = [
+                hit
+                for hit in hits_round_two
+                if hit.tweet_id not in {h.tweet_id for h in hits_round_one}
+            ]
+            if round_two_only:
+                orchestrator.build_kg(
+                    query, round_two_only, index, existing=kg, dspy_fallback=False
+                )
+
+    if args.json_out:
+        body = json.dumps(serialize_kg(kg), ensure_ascii=False, indent=2) + "\n"
+    else:
+        body = render_mindmap(query, kg) + "\n"
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(body, encoding="utf-8")
+    else:
+        sys.stdout.write(body)
+
+    return 0
+
+
 def _run_search(index: TweetIndex, args: argparse.Namespace) -> int:
     try:
         results = tools.search_likes(
@@ -482,6 +588,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.report_optimize is not None:
         return _run_report_optimize(index, args)
+
+    if args.kg is not None:
+        return _run_kg(index, args)
 
     try:
         server.run(index)
