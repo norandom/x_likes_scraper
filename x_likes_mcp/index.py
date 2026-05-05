@@ -462,12 +462,20 @@ class TweetIndex:
             for tid in fused_ids
         ]
 
+        # Coverage penalty needs per-token IDF. ``rank_bm25.BM25Okapi``
+        # exposes ``self.idf: dict[str, float]`` populated at index-build
+        # time; pass an empty dict when the corpus is the empty-sentinel
+        # so the ranker still falls back to the unknown-token IDF.
+        token_idf: dict[str, float] = dict(self.bm25.bm25.idf) if self.bm25.bm25 is not None else {}
+
         scored = ranker_module.rank(
             synthetic_hits,
             self.tweets_by_id,
             self.author_affinity,
             self.weights,
             anchor=anchor,
+            query=query,
+            token_idf=token_idf,
         )
         return scored[:top_n]
 

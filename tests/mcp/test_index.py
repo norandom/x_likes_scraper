@@ -717,9 +717,11 @@ def test_search_synthetic_hits_carry_dense_score_as_relevance(
     captured: dict[str, list[WalkerHit]] = {}
     real_rank = ranker_module.rank
 
-    def spy_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None):
+    def spy_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None, **kwargs):
         captured["hits"] = list(walker_hits)
-        return real_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor)
+        return real_rank(
+            walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor, **kwargs
+        )
 
     monkeypatch.setattr("x_likes_mcp.ranker.rank", spy_rank)
 
@@ -751,9 +753,11 @@ def test_search_passes_recency_anchor_at_end_of_month_end(
 
     real_rank = ranker_module.rank
 
-    def fake_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None):
+    def fake_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=None, **kwargs):
         captured["anchor"] = anchor
-        return real_rank(walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor)
+        return real_rank(
+            walker_hits, tweets_by_id, author_affinity, weights, anchor=anchor, **kwargs
+        )
 
     monkeypatch.setattr("x_likes_mcp.ranker.rank", fake_rank)
 

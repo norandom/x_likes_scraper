@@ -93,6 +93,14 @@ class RankerWeights:
     verified: float = 0.5
     media: float = 0.3
     recency_halflife_days: float = 180.0
+    # Coverage penalty: per-missing-query-token IDF multiplier. Subtracts
+    # ``idf(token) * coverage_penalty`` from the score for each query token
+    # the hit's text does not contain. A high-IDF token (rare in the corpus,
+    # e.g. "portfolio") hurts a lot; a low-IDF token (common, e.g. "AI")
+    # almost not at all. This pushes results that share only the broad
+    # topic word below results that cover the rare, topical terms. Set to
+    # ``0.0`` to disable.
+    coverage_penalty: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -377,4 +385,5 @@ def _load_ranker_weights(env: dict[str, str]) -> RankerWeights:
         verified=_f("RANKER_W_VERIFIED", defaults.verified),
         media=_f("RANKER_W_MEDIA", defaults.media),
         recency_halflife_days=_f("RANKER_RECENCY_HALFLIFE_DAYS", defaults.recency_halflife_days),
+        coverage_penalty=_f("RANKER_W_COVERAGE_PENALTY", defaults.coverage_penalty),
     )

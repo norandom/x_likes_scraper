@@ -25,11 +25,21 @@ from typing import TYPE_CHECKING
 
 from x_likes_exporter.dates import parse_x_datetime
 
+from .bm25 import tokenize
+from .corpus_text import tweet_index_text
+
 if TYPE_CHECKING:  # pragma: no cover
     from x_likes_exporter.models import Tweet
 
     from .config import RankerWeights
     from .walker import WalkerHit
+
+
+# Fallback IDF for query tokens absent from the BM25 vocabulary (i.e.
+# unseen in the corpus at index-build time). A modest positive value lets
+# the coverage penalty still fire without dominating; the corpus's own
+# IDF distribution is what does the heavy lifting for in-vocab tokens.
+_UNKNOWN_TOKEN_IDF: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,9 @@ def rank(
     author_affinity: dict[str, float],
     weights: RankerWeights,
     anchor: datetime | None = None,
+    *,
+    query: str | None = None,
+    token_idf: dict[str, float] | None = None,
 ) -> list[ScoredHit]:
     """Combine walker relevance with engagement / affinity / recency features.
 
@@ -85,11 +98,27 @@ def rank(
     (the walker may return IDs the tree saw but the tweets list does
     not, e.g. due to API drift between scrape and load).
 
+    When ``query`` and ``token_idf`` are both supplied, a coverage
+    penalty is applied: for each *distinct* tokenized query term that
+    the hit's indexed text does not contain, the score loses
+    ``token_idf.get(term, 1.0) * weights.coverage_penalty``. This keeps
+    "AI portfolio factors" from surfacing tweets that share only the
+    common topic word ("AI") and miss the rare, topical ones
+    ("portfolio", "factors"). The text used for coverage is the same
+    blob ``tweet_index_text`` produced for BM25 / dense indexing, so
+    URL slugs participate.
+
     Sorted descending by score; ties broken by ``walker_relevance``
     descending, then ``tweet_id`` ascending, for determinism.
     """
     if anchor is None:
         anchor = datetime.now(UTC)
+
+    # Tokenize the query once (deduped) so each hit pays only one
+    # tokenize call. Empty query → empty list → coverage feature stays 0.
+    query_tokens: list[str] = (
+        list(dict.fromkeys(tokenize(query))) if (query and weights.coverage_penalty) else []
+    )
 
     scored: list[ScoredHit] = []
     recency_logged = False
@@ -122,6 +151,24 @@ def rank(
         verified = (1.0 if tweet.user.verified else 0.0) * weights.verified
         media = (1.0 if tweet.media else 0.0) * weights.media
 
+        coverage = 0.0
+        if query_tokens:
+            tweet_tokens = set(tokenize(tweet_index_text(tweet)))
+            missing_idf_sum = 0.0
+            for term in query_tokens:
+                if term in tweet_tokens:
+                    continue
+                idf = (
+                    token_idf.get(term, _UNKNOWN_TOKEN_IDF)
+                    if token_idf is not None
+                    else _UNKNOWN_TOKEN_IDF
+                )
+                # Negative IDF can fall out of BM25's smoothed formula for
+                # very common tokens; clamp so the penalty never *adds*
+                # score for missing terms.
+                missing_idf_sum += max(0.0, idf)
+            coverage = -missing_idf_sum * weights.coverage_penalty
+
         breakdown = {
             "relevance": relevance,
             "favorite": favorite,
@@ -132,6 +179,7 @@ def rank(
             "recency": recency,
             "verified": verified,
             "media": media,
+            "coverage": coverage,
         }
         score = sum(breakdown.values())
 

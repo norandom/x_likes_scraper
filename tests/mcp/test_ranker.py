@@ -65,6 +65,7 @@ def _tweet(
     view_count: int = 0,
     verified: bool = False,
     media: list[Media] | None = None,
+    text: str | None = None,
 ) -> Tweet:
     """Construct a :class:`Tweet` with documented engagement defaults."""
 
@@ -72,7 +73,7 @@ def _tweet(
         created_at = _fmt_x_datetime(datetime(2025, 1, 15, 9, 30, 0, tzinfo=UTC))
     return Tweet(
         id=tweet_id,
-        text=f"hello from @{handle}",
+        text=text if text is not None else f"hello from @{handle}",
         created_at=created_at,
         user=_user(handle, verified=verified),
         favorite_count=favorite_count,
@@ -219,7 +220,8 @@ def test_rank_feature_breakdown_sums_to_score() -> None:
     assert sum(scored.feature_breakdown.values()) == pytest.approx(
         scored.score, rel=1e-12, abs=1e-12
     )
-    # All nine documented features are present.
+    # All ten documented features are present (coverage rides along even
+    # without a query — it stays 0 in that case).
     assert set(scored.feature_breakdown.keys()) == {
         "relevance",
         "favorite",
@@ -230,6 +232,7 @@ def test_rank_feature_breakdown_sums_to_score() -> None:
         "recency",
         "verified",
         "media",
+        "coverage",
     }
 
 
@@ -492,3 +495,150 @@ def test_rank_unparseable_created_at_zeros_recency_and_logs_once(
         if "ranker" in line.lower() or "recency" in line.lower() or "unparseable" in line.lower()
     ]
     assert len(stderr_lines) == 1
+
+
+# ---------------------------------------------------------------------------
+# rank: coverage penalty
+
+
+def test_rank_coverage_zero_when_no_query() -> None:
+    """Without ``query`` the coverage feature stays 0 and the breakdown is unchanged."""
+
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
+    tweet = _tweet(
+        "1",
+        "alice",
+        created_at=_fmt_x_datetime(anchor),
+        text="anything goes here",
+    )
+
+    ranked = rank(
+        [WalkerHit("1", 0.5, "")],
+        {"1": tweet},
+        {},
+        RankerWeights(),
+        anchor=anchor,
+    )
+
+    assert ranked[0].feature_breakdown["coverage"] == 0.0
+
+
+def test_rank_coverage_penalises_missing_high_idf_terms() -> None:
+    """Hit missing a high-IDF query term loses ``idf * coverage_penalty``."""
+
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
+    weights = RankerWeights(
+        # Drop noise so the coverage term is the only mover.
+        relevance=0.0,
+        favorite=0.0,
+        retweet=0.0,
+        reply=0.0,
+        view=0.0,
+        affinity=0.0,
+        recency=0.0,
+        verified=0.0,
+        media=0.0,
+        coverage_penalty=2.0,
+    )
+
+    covered = _tweet(
+        "covered",
+        "alice",
+        created_at=_fmt_x_datetime(anchor),
+        text="AI factors and portfolio analysis",
+    )
+    bare = _tweet(
+        "bare",
+        "alice",
+        created_at=_fmt_x_datetime(anchor),
+        text="AI security framework for automation",
+    )
+
+    # Hand-built per-token IDFs: "ai" is common (low), "portfolio" / "factors"
+    # rare (high). The bare hit misses both rare terms and one common one.
+    token_idf = {"ai": 0.1, "factors": 4.0, "portfolio": 5.0}
+
+    ranked = rank(
+        [WalkerHit("covered", 0.0, ""), WalkerHit("bare", 0.0, "")],
+        {"covered": covered, "bare": bare},
+        {},
+        weights,
+        anchor=anchor,
+        query="AI factors for portfolio",
+        token_idf=token_idf,
+    )
+
+    by_id = {s.tweet_id: s for s in ranked}
+    # Query tokens: ["ai", "factors", "for", "portfolio"].
+    # "covered" tweet tokens: ["ai", "factors", "and", "portfolio", "analysis"]
+    #   — missing only "for" (unknown to the IDF map → fallback IDF 1.0).
+    assert by_id["covered"].feature_breakdown["coverage"] == pytest.approx(-1.0 * 2.0, rel=1e-12)
+    # "bare" tweet tokens: ["ai", "security", "framework", "for", "automation"]
+    #   — present: "ai", "for"; missing: "factors" (IDF 4.0), "portfolio" (5.0).
+    assert by_id["bare"].feature_breakdown["coverage"] == pytest.approx(
+        -(4.0 + 5.0) * 2.0, rel=1e-12
+    )
+    # The "covered" tweet outranks the "bare" one.
+    assert ranked[0].tweet_id == "covered"
+
+
+def test_rank_coverage_disabled_when_weight_zero() -> None:
+    """``coverage_penalty=0.0`` short-circuits tokenization and stays 0."""
+
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
+    tweet = _tweet(
+        "1",
+        "alice",
+        created_at=_fmt_x_datetime(anchor),
+        text="ai security framework",
+    )
+
+    weights = RankerWeights(coverage_penalty=0.0)
+    ranked = rank(
+        [WalkerHit("1", 0.5, "")],
+        {"1": tweet},
+        {},
+        weights,
+        anchor=anchor,
+        query="AI factors for portfolio",
+        token_idf={"factors": 5.0, "portfolio": 5.0},
+    )
+
+    assert ranked[0].feature_breakdown["coverage"] == 0.0
+
+
+def test_rank_coverage_clamps_negative_idf() -> None:
+    """A token with negative IDF (BM25 smoothing artefact) costs nothing."""
+
+    anchor = datetime(2025, 6, 1, tzinfo=UTC)
+    tweet = _tweet(
+        "1",
+        "alice",
+        created_at=_fmt_x_datetime(anchor),
+        text="hello world",
+    )
+    weights = RankerWeights(
+        relevance=0.0,
+        favorite=0.0,
+        retweet=0.0,
+        reply=0.0,
+        view=0.0,
+        affinity=0.0,
+        recency=0.0,
+        verified=0.0,
+        media=0.0,
+        coverage_penalty=10.0,
+    )
+
+    ranked = rank(
+        [WalkerHit("1", 0.0, "")],
+        {"1": tweet},
+        {},
+        weights,
+        anchor=anchor,
+        query="ubiquitous",
+        token_idf={"ubiquitous": -2.0},
+    )
+
+    # Negative IDF clamps to 0 → no penalty contribution.
+    assert ranked[0].feature_breakdown["coverage"] == 0.0
