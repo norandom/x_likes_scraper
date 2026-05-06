@@ -28,13 +28,23 @@ component) and requirements 1.2, 7.5, 8.1, 8.3, 8.4, 9.4.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-from x_likes_mcp.sanitize import sanitize_text
+from x_likes_mcp.sanitize import safe_http_url, sanitize_text
 from x_likes_mcp.synthesis.mindmap import render_mindmap
 from x_likes_mcp.synthesis.shapes import ReportShape
 from x_likes_mcp.tools import _build_status_url
+
+# t.co shortlink pattern. The exporter scrapes ``Tweet.text`` with the
+# raw t.co tokens but resolves them out into ``Tweet.urls``; the
+# renderer rewrites the snippet by stripping the shortlinks and
+# appending the resolved URLs so the markdown body contains
+# navigable links instead of opaque t.co/abc redirects. Mirrors the
+# same pattern used by ``__main__._expand_snippet``.
+_TCO_RE = re.compile(r"https?://t\.co/\S+")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
 
 if TYPE_CHECKING:  # pragma: no cover - import-time only
     from x_likes_mcp.synthesis.dspy_modules import SynthesisResult
@@ -99,15 +109,47 @@ def _hit_field(hit: Any, name: str, default: str = "") -> str:
     return str(value)
 
 
+def _expand_tco_in_snippet(snippet: str, urls: list[str]) -> str:
+    """Strip ``t.co`` shortlinks from ``snippet`` and append resolved URLs.
+
+    The exporter writes raw t.co tokens into ``Tweet.text`` while the
+    resolved URLs live in ``Tweet.urls``. Substituting positionally is
+    fragile, so we follow the same approach the existing CLI search
+    output uses: drop every t.co occurrence and append the resolved
+    URLs at the end of the snippet, deduped and filtered through
+    :func:`safe_http_url` so non-HTTP(S) garbage cannot reach the
+    rendered markdown.
+    """
+
+    cleaned = _TCO_RE.sub("", sanitize_text(snippet))
+    cleaned = _WHITESPACE_RUN_RE.sub(" ", cleaned).strip()
+    if not urls:
+        return cleaned
+    real_urls: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        safe = safe_http_url(raw)
+        if safe and safe not in seen:
+            seen.add(safe)
+            real_urls.append(safe)
+    if not real_urls:
+        return cleaned
+    if cleaned:
+        return cleaned + "  " + " ".join(real_urls)
+    return " ".join(real_urls)
+
+
 def _anchor_tweet_line(hit: Any, *, snippet_chars: int = _SNIPPET_MAX_CHARS) -> str:
     """Render a single anchor-tweet bullet for ``hit``.
 
     Format::
 
-        - [<id>](<canonical x.com URL>): <truncated snippet>
+        - [<id>](<canonical x.com URL>): <truncated snippet with resolved URLs>
 
     The snippet is sanitized so any control / BiDi codepoints carried on
-    a freshly indexed hit do not leak into the markdown body. The URL is
+    a freshly indexed hit do not leak into the markdown body, then any
+    raw t.co shortlinks are stripped and replaced with the resolved
+    URLs the exporter captured in ``Tweet.urls``. The status URL is
     built via :func:`_build_status_url`, which falls back to
     ``https://x.com/i/status/{id}`` when the handle is empty or malformed.
     """
@@ -115,7 +157,9 @@ def _anchor_tweet_line(hit: Any, *, snippet_chars: int = _SNIPPET_MAX_CHARS) -> 
     tweet_id = _hit_field(hit, "tweet_id")
     handle = _hit_field(hit, "handle")
     snippet_raw = _hit_field(hit, "snippet")
-    snippet = _truncate(sanitize_text(snippet_raw).strip(), snippet_chars)
+    raw_urls = getattr(hit, "urls", None) or []
+    expanded = _expand_tco_in_snippet(snippet_raw, list(raw_urls))
+    snippet = _truncate(expanded, snippet_chars)
     url = _build_status_url(handle, tweet_id)
     if not url:
         # Fall back to the bare tweet ID label when no link is available.

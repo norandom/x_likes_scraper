@@ -511,6 +511,10 @@ def _inject_hit_metadata(hits: list[ScoredHit], index: TweetIndex) -> None:
             object.__setattr__(hit, "handle", _hit_handle(hit, index))
         if not getattr(hit, "snippet", None):
             object.__setattr__(hit, "snippet", _hit_text(hit, index))
+        if not getattr(hit, "urls", None):
+            tweet = index.tweets_by_id.get(hit.tweet_id)
+            urls = list(getattr(tweet, "urls", []) or []) if tweet is not None else []
+            object.__setattr__(hit, "urls", urls)
 
 
 def _populate_kg_from_hits(

@@ -59,6 +59,7 @@ class FakeHit:
     walker_relevance: float = 0.0
     why: str = ""
     feature_breakdown: dict[str, float] = field(default_factory=dict)
+    urls: list[str] = field(default_factory=list)
 
 
 def _make_hit(
@@ -67,6 +68,7 @@ def _make_hit(
     year_month: str = "2024-06",
     snippet: str = "tweet body",
     created_at: str = "Sat Jun 01 12:00:00 +0000 2024",
+    urls: list[str] | None = None,
 ) -> FakeHit:
     return FakeHit(
         tweet_id=tweet_id,
@@ -74,6 +76,7 @@ def _make_hit(
         snippet=snippet,
         year_month=year_month,
         created_at=created_at,
+        urls=list(urls or []),
     )
 
 
@@ -609,3 +612,55 @@ def test_render_report_returns_str() -> None:
     )
     assert isinstance(body, str)
     assert body.strip() != ""
+
+
+# ---------------------------------------------------------------------------
+# t.co rewrite in anchor snippets
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_snippet_strips_tco_and_appends_resolved_urls() -> None:
+    """Raw t.co tokens are removed from the snippet and the resolved
+    URLs from ``Tweet.urls`` are appended at the end."""
+
+    options = _make_options(query="x", shape=ReportShape.BRIEF)
+    hit = _make_hit(
+        "100",
+        handle="alice",
+        snippet="check this https://t.co/abcdef out",
+        urls=["https://example.com/article"],
+    )
+    body = render_report(
+        shape=ReportShape.BRIEF,
+        options=options,
+        hits=[hit],
+        fetched_urls=[],
+        kg=_empty_kg(),
+        synthesis=_brief_synthesis(),
+    )
+
+    assert "https://t.co/abcdef" not in body
+    assert "https://example.com/article" in body
+
+
+def test_anchor_snippet_drops_unsafe_url_schemes() -> None:
+    """Non-HTTP(S) entries in ``Tweet.urls`` are filtered out."""
+
+    options = _make_options(query="x", shape=ReportShape.BRIEF)
+    hit = _make_hit(
+        "100",
+        handle="alice",
+        snippet="see https://t.co/x",
+        urls=["javascript:alert(1)", "https://safe.example/"],
+    )
+    body = render_report(
+        shape=ReportShape.BRIEF,
+        options=options,
+        hits=[hit],
+        fetched_urls=[],
+        kg=_empty_kg(),
+        synthesis=_brief_synthesis(),
+    )
+
+    assert "javascript:" not in body
+    assert "https://safe.example/" in body
