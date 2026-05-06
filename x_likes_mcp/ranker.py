@@ -82,6 +82,90 @@ def recency_decay(created_at: str, anchor: datetime, halflife_days: float) -> fl
     return math.exp(-days / halflife_days)
 
 
+def _coverage_penalty(
+    tweet: Tweet,
+    query_tokens: list[str],
+    token_idf: dict[str, float] | None,
+    coverage_weight: float,
+) -> float:
+    """Sum the per-missing-token IDF penalty for one tweet.
+
+    Returns the negative coverage contribution; ``0.0`` when
+    ``query_tokens`` is empty or the tweet contains every query term.
+    Negative IDF (which BM25's smoothed formula can produce for very
+    common tokens) is clamped so the penalty never *adds* score.
+    """
+
+    if not query_tokens:
+        return 0.0
+    tweet_tokens = set(tokenize(tweet_index_text(tweet)))
+    missing_idf_sum = 0.0
+    for term in query_tokens:
+        if term in tweet_tokens:
+            continue
+        idf = (
+            token_idf.get(term, _UNKNOWN_TOKEN_IDF) if token_idf is not None else _UNKNOWN_TOKEN_IDF
+        )
+        missing_idf_sum += max(0.0, idf)
+    return -missing_idf_sum * coverage_weight
+
+
+def _score_features(
+    hit: WalkerHit,
+    tweet: Tweet,
+    weights: RankerWeights,
+    author_affinity: dict[str, float],
+    anchor: datetime,
+    recency_logged_state: list[bool],
+    query_tokens: list[str],
+    token_idf: dict[str, float] | None,
+) -> tuple[float, dict[str, float]]:
+    """Compute the per-feature breakdown and total score for one tweet.
+
+    ``recency_logged_state`` is a 1-element mutable flag list so the
+    ``unparseable created_at`` warning prints exactly once across the
+    whole rank loop, matching the pre-refactor behavior.
+    """
+
+    relevance = hit.relevance * weights.relevance
+    favorite = math.log1p(max(0, tweet.favorite_count)) * weights.favorite
+    retweet = math.log1p(max(0, tweet.retweet_count)) * weights.retweet
+    reply = math.log1p(max(0, tweet.reply_count)) * weights.reply
+    view = math.log1p(max(0, tweet.view_count)) * weights.view
+    affinity = author_affinity.get(tweet.user.screen_name, 0.0) * weights.affinity
+
+    try:
+        recency = (
+            recency_decay(tweet.created_at, anchor, weights.recency_halflife_days) * weights.recency
+        )
+    except ValueError:
+        recency = 0.0
+        if not recency_logged_state[0]:
+            print(
+                "ranker: unparseable created_at; recency=0 for one or more hits",
+                file=sys.stderr,
+            )
+            recency_logged_state[0] = True
+
+    verified = (1.0 if tweet.user.verified else 0.0) * weights.verified
+    media = (1.0 if tweet.media else 0.0) * weights.media
+    coverage = _coverage_penalty(tweet, query_tokens, token_idf, weights.coverage_penalty)
+
+    breakdown = {
+        "relevance": relevance,
+        "favorite": favorite,
+        "retweet": retweet,
+        "reply": reply,
+        "view": view,
+        "affinity": affinity,
+        "recency": recency,
+        "verified": verified,
+        "media": media,
+        "coverage": coverage,
+    }
+    return sum(breakdown.values()), breakdown
+
+
 def rank(
     walker_hits: list[WalkerHit],
     tweets_by_id: dict[str, Tweet],
@@ -121,68 +205,21 @@ def rank(
     )
 
     scored: list[ScoredHit] = []
-    recency_logged = False
+    recency_logged_state = [False]
     for hit in walker_hits:
         tweet = tweets_by_id.get(hit.tweet_id)
         if tweet is None:
             continue
-
-        relevance = hit.relevance * weights.relevance
-        favorite = math.log1p(max(0, tweet.favorite_count)) * weights.favorite
-        retweet = math.log1p(max(0, tweet.retweet_count)) * weights.retweet
-        reply = math.log1p(max(0, tweet.reply_count)) * weights.reply
-        view = math.log1p(max(0, tweet.view_count)) * weights.view
-        affinity = author_affinity.get(tweet.user.screen_name, 0.0) * weights.affinity
-
-        try:
-            recency = (
-                recency_decay(tweet.created_at, anchor, weights.recency_halflife_days)
-                * weights.recency
-            )
-        except ValueError:
-            recency = 0.0
-            if not recency_logged:
-                print(
-                    "ranker: unparseable created_at; recency=0 for one or more hits",
-                    file=sys.stderr,
-                )
-                recency_logged = True
-
-        verified = (1.0 if tweet.user.verified else 0.0) * weights.verified
-        media = (1.0 if tweet.media else 0.0) * weights.media
-
-        coverage = 0.0
-        if query_tokens:
-            tweet_tokens = set(tokenize(tweet_index_text(tweet)))
-            missing_idf_sum = 0.0
-            for term in query_tokens:
-                if term in tweet_tokens:
-                    continue
-                idf = (
-                    token_idf.get(term, _UNKNOWN_TOKEN_IDF)
-                    if token_idf is not None
-                    else _UNKNOWN_TOKEN_IDF
-                )
-                # Negative IDF can fall out of BM25's smoothed formula for
-                # very common tokens; clamp so the penalty never *adds*
-                # score for missing terms.
-                missing_idf_sum += max(0.0, idf)
-            coverage = -missing_idf_sum * weights.coverage_penalty
-
-        breakdown = {
-            "relevance": relevance,
-            "favorite": favorite,
-            "retweet": retweet,
-            "reply": reply,
-            "view": view,
-            "affinity": affinity,
-            "recency": recency,
-            "verified": verified,
-            "media": media,
-            "coverage": coverage,
-        }
-        score = sum(breakdown.values())
-
+        score, breakdown = _score_features(
+            hit,
+            tweet,
+            weights,
+            author_affinity,
+            anchor,
+            recency_logged_state,
+            query_tokens,
+            token_idf,
+        )
         scored.append(
             ScoredHit(
                 tweet_id=hit.tweet_id,

@@ -164,6 +164,135 @@ def _assemble_blob(
     return "\n\n".join(parts)
 
 
+def _fence_tweet_section(
+    hits: list[ScoredHit], budget: FencingBudget
+) -> tuple[list[str], list[str]]:
+    """Render fenced tweet blocks and their parallel ``tweet:<id>`` list."""
+
+    tweet_blocks: list[str] = []
+    tweet_ids: list[str] = []
+    for hit in hits:
+        # The orchestrator may inject the snippet onto the hit (or pass a
+        # ScoredHit subclass that carries it). We fall back to "" so a
+        # ScoredHit without a snippet still emits a structural slot the
+        # claim-source validator can count against.
+        body = getattr(hit, "snippet", "") or ""
+        prepared = _prepare_body(body, budget.per_tweet_bytes)
+        tweet_blocks.append(fence_tweet_for_llm(prepared))
+        tweet_ids.append(f"tweet:{hit.tweet_id}")
+    return tweet_blocks, tweet_ids
+
+
+def _fence_url_section(
+    fetched_urls: list[FetchedUrl], budget: FencingBudget
+) -> tuple[list[str], list[str], list[str]]:
+    """Render fenced URL link + body blocks and their ``url:<final>`` ids."""
+
+    url_blocks: list[str] = []
+    url_body_blocks: list[str] = []
+    url_ids: list[str] = []
+    for fetched in fetched_urls:
+        # The URL link itself is short and is not subject to the per-URL
+        # body cap (it carries one normalized HTTP(S) URL). The fence
+        # helper returns ``None`` when the URL fails the safe-HTTP
+        # check; in that case both the URL block and its body block
+        # are dropped together so the blob never references a URL the
+        # LM cannot cite back.
+        url_block = fence_url_for_llm(fetched.final_url)
+        if url_block is None:
+            continue
+        body_prepared = _prepare_body(fetched.sanitized_markdown, budget.per_url_body_bytes)
+        url_blocks.append(url_block)
+        url_body_blocks.append(fence_url_body_for_llm(body_prepared))
+        url_ids.append(f"url:{fetched.final_url}")
+    return url_blocks, url_body_blocks, url_ids
+
+
+def _fence_entity_section(kg: KG, budget: FencingBudget) -> list[str]:
+    """Render fenced top-K entity blocks across handle/hashtag/domain/concept."""
+
+    entity_blocks: list[str] = []
+    for kind in (
+        NodeKind.HANDLE,
+        NodeKind.HASHTAG,
+        NodeKind.DOMAIN,
+        NodeKind.CONCEPT,
+    ):
+        for node in kg.top_entities(kind, 8):
+            label = _prepare_body(node.label, budget.per_entity_bytes)
+            fenced = fence_entity_for_llm(label)
+            if fenced is not None:
+                entity_blocks.append(fenced)
+    return entity_blocks
+
+
+def _fence_kg_section(kg: KG, budget: FencingBudget) -> tuple[list[str], list[str]]:
+    """Render fenced KG node + edge blocks (capped by MAX_KG_NODES/EDGES)."""
+
+    # KG nodes / edges access the KG's internal node + edge stores
+    # directly: there is no public iterator on :class:`KG` and the
+    # boundary for this task forbids edits outside ``context.py``. The
+    # KG's ``__slots__`` surface keeps the access well-defined.
+    kg_node_blocks: list[str] = []
+    for idx, node in enumerate(kg._nodes.values()):
+        if idx >= MAX_KG_NODES:
+            break
+        label = _prepare_body(node.label, budget.per_kg_label_bytes)
+        kg_node_blocks.append(fence_kg_node_for_llm(label))
+
+    kg_edge_blocks: list[str] = []
+    for idx, edge in enumerate(kg._edges):
+        if idx >= MAX_KG_EDGES:
+            break
+        caption = f"{edge.src} {edge.kind.value} {edge.dst}"
+        prepared = _prepare_body(caption, budget.per_kg_label_bytes)
+        kg_edge_blocks.append(fence_kg_edge_for_llm(prepared))
+    return kg_node_blocks, kg_edge_blocks
+
+
+def _enforce_total_budget(
+    shape_value: str,
+    tweet_blocks: list[str],
+    tweet_ids: list[str],
+    url_blocks: list[str],
+    url_body_blocks: list[str],
+    url_ids: list[str],
+    entity_blocks: list[str],
+    kg_node_blocks: list[str],
+    kg_edge_blocks: list[str],
+    budget: FencingBudget,
+) -> str:
+    """Drop lowest-rank URL bodies, then tweets, until the blob fits.
+
+    Mutates the passed-in block / id lists in place so the caller's
+    parallel ``tweet_ids`` / ``url_ids`` lists track the surviving
+    sources after enforcement.
+    """
+
+    def _current_blob() -> str:
+        return _assemble_blob(
+            shape_value,
+            tweet_blocks,
+            url_blocks,
+            url_body_blocks,
+            entity_blocks,
+            kg_node_blocks,
+            kg_edge_blocks,
+        )
+
+    blob = _current_blob()
+    while _byte_len(blob) > budget.total_bytes and url_body_blocks:
+        url_body_blocks.pop()
+        url_blocks.pop()
+        url_ids.pop()
+        blob = _current_blob()
+    while _byte_len(blob) > budget.total_bytes and tweet_blocks:
+        tweet_blocks.pop()
+        tweet_ids.pop()
+        blob = _current_blob()
+    return blob
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -219,104 +348,31 @@ def build_fenced_context(
     """
 
     # ---- per-source rendering ------------------------------------------
-    # Tweets keep a parallel ``tweet_ids`` list so the budget enforcer can
-    # synchronize drops between the rendered block list and the
-    # known-source set. ``url_ids`` does the same for URL bodies.
-    tweet_blocks: list[str] = []
-    tweet_ids: list[str] = []
-    for hit in hits:
-        # The orchestrator may inject the snippet onto the hit (or pass a
-        # ScoredHit subclass that carries it). We fall back to "" so a
-        # ScoredHit without a snippet still emits a structural slot the
-        # claim-source validator can count against.
-        body = getattr(hit, "snippet", "") or ""
-        prepared = _prepare_body(body, budget.per_tweet_bytes)
-        tweet_blocks.append(fence_tweet_for_llm(prepared))
-        tweet_ids.append(f"tweet:{hit.tweet_id}")
-
-    url_blocks: list[str] = []
-    url_body_blocks: list[str] = []
-    url_ids: list[str] = []
-    for fetched in fetched_urls:
-        # The URL link itself is short and is not subject to the per-URL
-        # body cap (it carries one normalized HTTP(S) URL). The fence
-        # helper returns ``None`` when the URL fails the safe-HTTP
-        # check; in that case both the URL block and its body block
-        # are dropped together so the blob never references a URL the
-        # LM cannot cite back.
-        url_block = fence_url_for_llm(fetched.final_url)
-        if url_block is None:
-            continue
-        body_prepared = _prepare_body(fetched.sanitized_markdown, budget.per_url_body_bytes)
-        url_blocks.append(url_block)
-        url_body_blocks.append(fence_url_body_for_llm(body_prepared))
-        url_ids.append(f"url:{fetched.final_url}")
-
-    # Entities: top-K of each kind, fenced one per line. ``None`` from
-    # fence_entity_for_llm is dropped.
-    entity_blocks: list[str] = []
-    for kind in (
-        NodeKind.HANDLE,
-        NodeKind.HASHTAG,
-        NodeKind.DOMAIN,
-        NodeKind.CONCEPT,
-    ):
-        for node in kg.top_entities(kind, 8):
-            label = _prepare_body(node.label, budget.per_entity_bytes)
-            fenced = fence_entity_for_llm(label)
-            if fenced is not None:
-                entity_blocks.append(fenced)
-
-    # KG nodes: cap at MAX_KG_NODES so a huge graph cannot crowd out the
-    # rest of the context. Iterate in insertion order for determinism.
-    # Access the KG's internal node / edge stores directly: there is no
-    # public iterator on :class:`KG` and the boundary for this task
-    # forbids edits outside ``context.py``. The KG's ``__slots__``
-    # surface keeps the access well-defined.
-    kg_node_blocks: list[str] = []
-    for idx, node in enumerate(kg._nodes.values()):
-        if idx >= MAX_KG_NODES:
-            break
-        label = _prepare_body(node.label, budget.per_kg_label_bytes)
-        kg_node_blocks.append(fence_kg_node_for_llm(label))
-
-    # KG edges: caption format is ``"<src> <kind> <dst>"``. Cap at
-    # MAX_KG_EDGES with the same rationale as KG nodes.
-    kg_edge_blocks: list[str] = []
-    for idx, edge in enumerate(kg._edges):
-        if idx >= MAX_KG_EDGES:
-            break
-        caption = f"{edge.src} {edge.kind.value} {edge.dst}"
-        prepared = _prepare_body(caption, budget.per_kg_label_bytes)
-        kg_edge_blocks.append(fence_kg_edge_for_llm(prepared))
+    # Tweets / URLs keep parallel id lists so the budget enforcer can
+    # synchronize drops between the rendered block lists and the
+    # known-source set.
+    tweet_blocks, tweet_ids = _fence_tweet_section(hits, budget)
+    url_blocks, url_body_blocks, url_ids = _fence_url_section(fetched_urls, budget)
+    entity_blocks = _fence_entity_section(kg, budget)
+    kg_node_blocks, kg_edge_blocks = _fence_kg_section(kg, budget)
 
     # ---- total-budget enforcement --------------------------------------
-    # Drop URL bodies in reverse rank order first (the lowest-rank URL
-    # body — last in the list — goes first). Each drop also removes the
-    # paired URL link block and the URL's known-source ID. After URL
-    # bodies are exhausted, drop tweets in reverse rank order. Re-check
-    # after every drop and stop as soon as the blob fits.
-    def _current_blob() -> str:
-        return _assemble_blob(
-            shape.value,
-            tweet_blocks,
-            url_blocks,
-            url_body_blocks,
-            entity_blocks,
-            kg_node_blocks,
-            kg_edge_blocks,
-        )
-
-    blob = _current_blob()
-    while _byte_len(blob) > budget.total_bytes and url_body_blocks:
-        url_body_blocks.pop()
-        url_blocks.pop()
-        url_ids.pop()
-        blob = _current_blob()
-    while _byte_len(blob) > budget.total_bytes and tweet_blocks:
-        tweet_blocks.pop()
-        tweet_ids.pop()
-        blob = _current_blob()
+    # Drop URL bodies in reverse rank order first (lowest-rank — last in
+    # the list — goes first). Each drop also removes the paired URL link
+    # block and the URL's known-source ID. After URL bodies are
+    # exhausted, drop tweets in reverse rank order.
+    blob = _enforce_total_budget(
+        shape.value,
+        tweet_blocks,
+        tweet_ids,
+        url_blocks,
+        url_body_blocks,
+        url_ids,
+        entity_blocks,
+        kg_node_blocks,
+        kg_edge_blocks,
+        budget,
+    )
 
     known_source_ids: set[str] = set(tweet_ids) | set(url_ids)
     return blob, known_source_ids

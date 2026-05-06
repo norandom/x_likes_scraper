@@ -104,8 +104,9 @@ def _local_media_files(tweet_id: str, media_dir: Path) -> list[Path]:
     return sorted(media_dir.glob(f"{tweet_id}_*"))
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="x-likes-mcp")
+def _add_mode_group(parser: argparse.ArgumentParser) -> None:
+    """Register the mutually-exclusive top-level mode flags on ``parser``."""
+
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--init",
@@ -154,6 +155,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "call, no URL fetch."
         ),
     )
+
+
+def _add_report_flags(parser: argparse.ArgumentParser) -> None:
+    """Register flags consumed by ``--report`` / ``--report-optimize`` / ``--kg``."""
+
     parser.add_argument(
         "--query",
         default=None,
@@ -207,6 +213,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(requires OPENAI_BASE_URL configured)."
         ),
     )
+
+
+def _add_search_filter_flags(parser: argparse.ArgumentParser) -> None:
+    """Register the shared filter / output flags used by --search and friends."""
+
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month-start", default=None, dest="month_start")
     parser.add_argument("--month-end", default=None, dest="month_end")
@@ -227,6 +238,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="json_out",
         help="Print results as one JSON object per line instead of pretty text.",
     )
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="x-likes-mcp")
+    _add_mode_group(parser)
+    _add_report_flags(parser)
+    _add_search_filter_flags(parser)
     return parser.parse_args(argv)
 
 

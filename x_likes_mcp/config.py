@@ -212,6 +212,106 @@ def _resolve_env(
     return merged
 
 
+def _resolve_paths(
+    output_dir_raw: str, url_cache_dir_raw: str
+) -> tuple[Path, Path, Path, Path, Path]:
+    """Build the on-disk path bundle from ``OUTPUT_DIR`` + ``URL_CACHE_DIR``.
+
+    Returns ``(output_dir, by_month_dir, likes_json, cache_path,
+    url_cache_dir)``. ``url_cache_dir`` falls back to
+    ``output_dir / "url_cache"`` when the operator did not pin
+    ``URL_CACHE_DIR`` so a relocated ``OUTPUT_DIR`` carries the URL
+    cache with it.
+    """
+
+    output_dir = Path(output_dir_raw)
+    by_month_dir = output_dir / "by_month"
+    likes_json = output_dir / "likes.json"
+    cache_path = output_dir / "tweet_tree_cache.pkl"
+    url_cache_dir = Path(url_cache_dir_raw) if url_cache_dir_raw else output_dir / "url_cache"
+    return output_dir, by_month_dir, likes_json, cache_path, url_cache_dir
+
+
+def _resolve_lm_endpoint(
+    resolved: dict[str, str], openrouter_api_key_raw: str, openrouter_base_url: str
+) -> tuple[str | None, str | None, str]:
+    """Apply the OpenRouter-as-LM fallback to the OpenAI seam.
+
+    Returns ``(openai_base_url, openai_model, openai_api_key)``. When the
+    operator only set ``OPENROUTER_API_KEY`` (the typical single-key
+    cloud setup) and did not pin the walker / synthesizer LM endpoint,
+    the OpenAI seam is pointed at OpenRouter (OpenAI-shape, same key
+    drives both embeddings and the LM call). An explicit
+    ``OPENAI_BASE_URL`` / ``OPENAI_MODEL`` / ``OPENAI_API_KEY`` always
+    wins so a separate local proxy (vLLM, llama-cpp-server, Ollama,
+    LiteLLM) keeps getting that endpoint.
+    """
+
+    openai_base_url = resolved.get("OPENAI_BASE_URL", "") or None
+    openai_model = resolved.get("OPENAI_MODEL", "") or None
+    openai_api_key = resolved.get("OPENAI_API_KEY", "") or ""
+
+    if openrouter_api_key_raw:
+        if openai_base_url is None:
+            openai_base_url = openrouter_base_url
+        if openai_api_key == "":
+            openai_api_key = openrouter_api_key_raw
+        if openai_model is None:
+            openai_model = DEFAULT_SYNTHESIS_MODEL
+
+    return openai_base_url, openai_model, openai_api_key
+
+
+def _apply_environ_side_effects(openai_base_url: str | None, openai_api_key: str) -> None:
+    """Hand off the OpenAI base URL (and API key, when set) to ``os.environ``.
+
+    The OpenAI SDK that walker.py constructs internally picks these up
+    at client-construction time. Skip when the walker is not configured
+    — the walker surfaces its own error if invoked without these.
+    """
+
+    if openai_base_url:
+        os.environ["OPENAI_BASE_URL"] = openai_base_url
+    if openai_api_key:
+        os.environ["OPENAI_API_KEY"] = openai_api_key
+
+
+def _resolve_synthesis_config(
+    resolved: dict[str, str],
+) -> tuple[str, int, int, int, int, int, list[IPNetwork]]:
+    """Read the synthesis-report env vars (``CRAWL4AI_*``, ``SYNTHESIS_*``).
+
+    Returns the seven fields in the order the :class:`Config`
+    constructor consumes them. Numeric and CIDR fields use the same
+    fail-loud discipline as ``_load_ranker_weights``.
+    """
+
+    crawl4ai_base_url = resolved.get("CRAWL4AI_BASE_URL", "") or DEFAULT_CRAWL4AI_BASE_URL
+    url_cache_ttl_days = _load_int(resolved, "URL_CACHE_TTL_DAYS", DEFAULT_URL_CACHE_TTL_DAYS)
+    synthesis_max_hops = _load_int(resolved, "SYNTHESIS_MAX_HOPS", DEFAULT_SYNTHESIS_MAX_HOPS)
+    synthesis_per_source_bytes = _load_int(
+        resolved, "SYNTHESIS_PER_SOURCE_BYTES", DEFAULT_SYNTHESIS_PER_SOURCE_BYTES
+    )
+    synthesis_total_context_bytes = _load_int(
+        resolved, "SYNTHESIS_TOTAL_CONTEXT_BYTES", DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES
+    )
+    synthesis_round_two_k = _load_int(
+        resolved, "SYNTHESIS_ROUND_TWO_K", DEFAULT_SYNTHESIS_ROUND_TWO_K
+    )
+    url_fetch_allowed_private_cidrs = _load_cidr_allowlist(
+        resolved, "URL_FETCH_ALLOWED_PRIVATE_CIDRS"
+    )
+    return (
+        crawl4ai_base_url,
+        url_cache_ttl_days,
+        synthesis_max_hops,
+        synthesis_per_source_bytes,
+        synthesis_total_context_bytes,
+        synthesis_round_two_k,
+        url_fetch_allowed_private_cidrs,
+    )
+
+
 def load_config(
     env_path: Path | None = None,
     env: dict[str, str] | None = None,
@@ -237,10 +337,6 @@ def load_config(
 
     resolved = _resolve_env(env_path, env)
 
-    openai_base_url = resolved.get("OPENAI_BASE_URL", "") or None
-    openai_model = resolved.get("OPENAI_MODEL", "") or None
-    openai_api_key = resolved.get("OPENAI_API_KEY", "") or ""
-
     # OpenRouter / embedding configuration. The URL and model fall back to
     # documented defaults; the API key is allowed to be ``None`` here and is
     # surfaced as an error later, at index-build time, so a developer can
@@ -250,62 +346,27 @@ def load_config(
     openrouter_api_key_raw = resolved.get("OPENROUTER_API_KEY", "") or ""
     openrouter_api_key: str | None = openrouter_api_key_raw or None
 
-    # OpenRouter-as-LM fallback. When the operator only set
-    # OPENROUTER_API_KEY (the typical single-key cloud setup) and did
-    # not pin the walker / synthesizer LM endpoint, point the LM seam
-    # at OpenRouter. OpenRouter is OpenAI-shape so the existing
-    # OPENAI_BASE_URL contract carries over; the same key drives both
-    # embeddings and the LM call. An explicit ``OPENAI_BASE_URL`` /
-    # ``OPENAI_MODEL`` / ``OPENAI_API_KEY`` always wins so a user who
-    # runs a separate local proxy (vLLM, llama-cpp-server, Ollama,
-    # LiteLLM) keeps getting that endpoint.
-    if openrouter_api_key_raw:
-        if openai_base_url is None:
-            openai_base_url = openrouter_base_url
-        if openai_api_key == "":
-            openai_api_key = openrouter_api_key_raw
-        if openai_model is None:
-            openai_model = DEFAULT_SYNTHESIS_MODEL
+    openai_base_url, openai_model, openai_api_key = _resolve_lm_endpoint(
+        resolved, openrouter_api_key_raw, openrouter_base_url
+    )
 
     output_dir_raw = resolved.get("OUTPUT_DIR", "") or "output"
-    output_dir = Path(output_dir_raw)
-    by_month_dir = output_dir / "by_month"
-    likes_json = output_dir / "likes.json"
-    cache_path = output_dir / "tweet_tree_cache.pkl"
-
-    # Synthesis-report fields. The CIDR allowlist parses at load time so
-    # a malformed entry raises ``ConfigError`` before the orchestrator
-    # ever opens a socket. Numeric fields use the same fail-loud
-    # discipline as ``_load_ranker_weights``.
-    crawl4ai_base_url = resolved.get("CRAWL4AI_BASE_URL", "") or DEFAULT_CRAWL4AI_BASE_URL
     url_cache_dir_raw = resolved.get("URL_CACHE_DIR", "") or ""
-    # Empty / unset → track ``output_dir`` so relocating ``OUTPUT_DIR``
-    # carries the URL cache with it. Explicit value (absolute or relative)
-    # is honored verbatim.
-    url_cache_dir = Path(url_cache_dir_raw) if url_cache_dir_raw else output_dir / "url_cache"
-    url_cache_ttl_days = _load_int(resolved, "URL_CACHE_TTL_DAYS", DEFAULT_URL_CACHE_TTL_DAYS)
-    synthesis_max_hops = _load_int(resolved, "SYNTHESIS_MAX_HOPS", DEFAULT_SYNTHESIS_MAX_HOPS)
-    synthesis_per_source_bytes = _load_int(
-        resolved, "SYNTHESIS_PER_SOURCE_BYTES", DEFAULT_SYNTHESIS_PER_SOURCE_BYTES
-    )
-    synthesis_total_context_bytes = _load_int(
-        resolved, "SYNTHESIS_TOTAL_CONTEXT_BYTES", DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES
-    )
-    synthesis_round_two_k = _load_int(
-        resolved, "SYNTHESIS_ROUND_TWO_K", DEFAULT_SYNTHESIS_ROUND_TWO_K
-    )
-    url_fetch_allowed_private_cidrs = _load_cidr_allowlist(
-        resolved, "URL_FETCH_ALLOWED_PRIVATE_CIDRS"
+    output_dir, by_month_dir, likes_json, cache_path, url_cache_dir = _resolve_paths(
+        output_dir_raw, url_cache_dir_raw
     )
 
-    # Side effect: hand off the OpenAI base URL (and API key, when set) to
-    # ``os.environ`` so the OpenAI SDK in walker.py picks them up at
-    # client-construction time. Skip when the walker is not configured —
-    # the walker surfaces its own error if invoked without these.
-    if openai_base_url:
-        os.environ["OPENAI_BASE_URL"] = openai_base_url
-    if openai_api_key:
-        os.environ["OPENAI_API_KEY"] = openai_api_key
+    (
+        crawl4ai_base_url,
+        url_cache_ttl_days,
+        synthesis_max_hops,
+        synthesis_per_source_bytes,
+        synthesis_total_context_bytes,
+        synthesis_round_two_k,
+        url_fetch_allowed_private_cidrs,
+    ) = _resolve_synthesis_config(resolved)
+
+    _apply_environ_side_effects(openai_base_url, openai_api_key)
 
     return Config(
         output_dir=output_dir,

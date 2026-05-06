@@ -176,34 +176,8 @@ class TweetIndex:
         if not paths:
             raise IndexError("output/by_month/ is empty or missing")
 
-        # 2. Newest .md mtime for the cache freshness check.
-        newest_md_mtime = max(p.stat().st_mtime for p in paths)
-
-        # 3. Cache hit/miss. Pickle usage is a deliberate design choice
-        #    (design.md): single-user, single-machine cache file written
-        #    by this server only, never crosses a trust boundary.
-        cache_path = config.cache_path
-        if cache_path.exists() and cache_path.stat().st_mtime >= newest_md_mtime:
-            with cache_path.open("rb") as fh:
-                tree_obj = pickle.load(
-                    fh
-                )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
-        else:
-            tree_obj = tree_module.build_tree(config.by_month_dir)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic write: dump to a sibling .tmp file then os.replace.
-            with tempfile.NamedTemporaryFile(
-                "wb",
-                dir=str(cache_path.parent),
-                prefix=cache_path.name + ".",
-                suffix=".tmp",
-                delete=False,
-            ) as fh:
-                pickle.dump(
-                    tree_obj, fh
-                )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
-                tmp_name = fh.name
-            os.replace(tmp_name, cache_path)
+        # 2-3. Tree cache hit-or-build (atomic write on miss).
+        tree_obj = _load_or_build_tree(config, paths)
 
         # 4. Tweet list keyed by id.
         tweets: list[Tweet] = load_export(config.likes_json)
@@ -219,18 +193,8 @@ class TweetIndex:
         # 6. Precompute author affinity.
         author_affinity = _compute_author_affinity(tweets)
 
-        # 7. Construct the embedder, build/load the corpus embeddings, and
-        #    build the in-memory BM25 index. The dense path persists its
-        #    matrix + metadata under ``config.output_dir`` and is reused on
-        #    subsequent starts; the BM25 index is rebuilt in memory each
-        #    time (sub-second at this corpus scale).
-        embedder = Embedder(
-            api_key=config.openrouter_api_key,
-            base_url=config.openrouter_base_url,
-            model_name=config.embedding_model,
-        )
-        corpus = open_or_build_corpus(embedder, tweets_by_id, config.output_dir)
-        bm25 = BM25Index.build(tweets_by_id)
+        # 7. Embedder + corpus + BM25.
+        embedder, corpus, bm25 = _build_index_components(config, tweets_by_id)
 
         return cls(
             tree=tree_obj,
@@ -416,13 +380,27 @@ class TweetIndex:
         candidate_ids = self._candidate_ids(year, month_start, month_end)
         anchor = _compute_anchor(year, month_start, month_end)
 
-        # Dense path. Any error (auth, network, malformed payload, numeric)
-        # degrades to an empty dense ranking. The single warning line is
-        # the operator's signal that the dense seam misbehaved.
-        dense_ranking: list[tuple[str, float]]
+        dense_ranking = self._run_dense_path(query, candidate_ids)
+        bm25_ranking = self._run_bm25_path(query, candidate_ids)
+
+        # Both retrievals down: cannot recover. Raise so tools.py can map
+        # to ``upstream_failure`` (req 7.6).
+        if not dense_ranking and not bm25_ranking:
+            raise EmbeddingError("both retrieval paths failed for this query")
+
+        return self._fuse_and_rank(dense_ranking, bm25_ranking, query, anchor, top_n)
+
+    def _run_dense_path(
+        self, query: str, candidate_ids: set[str] | None
+    ) -> list[tuple[str, float]]:
+        """Run dense retrieval; any error degrades to an empty ranking."""
+
+        # Any error (auth, network, malformed payload, numeric) degrades
+        # to an empty dense ranking. The single warning line is the
+        # operator's signal that the dense seam misbehaved.
         try:
             query_vec = self.embedder.embed_query(query)
-            dense_ranking = self.embedder.cosine_top_k(
+            return self.embedder.cosine_top_k(
                 query_vec,
                 self.corpus,
                 k=200,
@@ -430,22 +408,29 @@ class TweetIndex:
             )
         except Exception as exc:
             logger.warning("[search] dense retrieval failed: %s", exc)
-            dense_ranking = []
+            return []
 
-        # BM25 path. ``rank_bm25`` is pure-python so this branch is unlikely
-        # to fire in practice, but we mirror the dense path's degradation
-        # for symmetry (req 7.5).
-        bm25_ranking: list[tuple[str, float]]
+    def _run_bm25_path(self, query: str, candidate_ids: set[str] | None) -> list[tuple[str, float]]:
+        """Run BM25 retrieval; any error degrades to an empty ranking."""
+
+        # ``rank_bm25`` is pure-python so this branch is unlikely to fire
+        # in practice, but we mirror the dense path's degradation for
+        # symmetry (req 7.5).
         try:
-            bm25_ranking = self.bm25.top_k(query, k=200, restrict_to_ids=candidate_ids)
+            return self.bm25.top_k(query, k=200, restrict_to_ids=candidate_ids)
         except Exception as exc:
             logger.warning("[search] bm25 retrieval failed: %s", exc)
-            bm25_ranking = []
+            return []
 
-        # Both retrievals down: cannot recover. Raise so tools.py can map
-        # to ``upstream_failure`` (req 7.6).
-        if not dense_ranking and not bm25_ranking:
-            raise EmbeddingError("both retrieval paths failed for this query")
+    def _fuse_and_rank(
+        self,
+        dense_ranking: list[tuple[str, float]],
+        bm25_ranking: list[tuple[str, float]],
+        query: str,
+        anchor: datetime,
+        top_n: int,
+    ) -> list[ranker_module.ScoredHit]:
+        """Fuse two rankings via RRF and hand the synthetic hits to the ranker."""
 
         dense_ids = [tid for tid, _ in dense_ranking]
         bm25_ids = [tid for tid, _ in bm25_ranking]
@@ -482,6 +467,64 @@ class TweetIndex:
             token_idf=token_idf,
         )
         return scored[:top_n]
+
+
+def _load_or_build_tree(config: Config, paths: list[Path]) -> TweetTree:
+    """Return the cached ``TweetTree`` or rebuild it on a stale cache.
+
+    Cache is fresh when ``cache_path`` exists and its mtime is at least
+    the newest enumerated ``.md`` mtime. On miss, ``tree.build_tree``
+    runs and the result is written via ``.tmp`` + ``os.replace``. Pickle
+    use is the deliberate single-user, single-machine cache choice
+    documented in design.md; the file never crosses a trust boundary.
+    """
+
+    newest_md_mtime = max(p.stat().st_mtime for p in paths)
+    cache_path = config.cache_path
+    if cache_path.exists() and cache_path.stat().st_mtime >= newest_md_mtime:
+        with cache_path.open("rb") as fh:
+            tree_cached: TweetTree = pickle.load(
+                fh
+            )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
+            return tree_cached
+
+    tree_obj = tree_module.build_tree(config.by_month_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic write: dump to a sibling .tmp file then os.replace.
+    with tempfile.NamedTemporaryFile(
+        "wb",
+        dir=str(cache_path.parent),
+        prefix=cache_path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    ) as fh:
+        pickle.dump(
+            tree_obj, fh
+        )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
+        tmp_name = fh.name
+    os.replace(tmp_name, cache_path)
+    return tree_obj
+
+
+def _build_index_components(
+    config: Config, tweets_by_id: dict[str, Tweet]
+) -> tuple[Embedder, CorpusEmbeddings, BM25Index]:
+    """Construct the embedder, dense corpus, and BM25 index.
+
+    The dense path persists its matrix + metadata under
+    ``config.output_dir`` and is reused on subsequent starts; the BM25
+    index is rebuilt in memory each time (sub-second at this corpus
+    scale).
+    """
+
+    embedder = Embedder(
+        api_key=config.openrouter_api_key,
+        base_url=config.openrouter_base_url,
+        model_name=config.embedding_model,
+    )
+    corpus = open_or_build_corpus(embedder, tweets_by_id, config.output_dir)
+    bm25 = BM25Index.build(tweets_by_id)
+    return embedder, corpus, bm25
 
 
 def _compute_anchor(
