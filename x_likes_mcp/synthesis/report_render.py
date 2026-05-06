@@ -132,27 +132,62 @@ def _resolve_hit(tweet_id: str, hits: list[Any]) -> Any | None:
     return None
 
 
-def _format_sources(sources: list[str]) -> str:
-    """Format a claim's source list as ``(see: id1, id2)``.
+def _link_for_source(source: str, hits: list[Any]) -> str | None:
+    """Return a clickable URL for a ``tweet:<id>`` or ``url:<final_url>`` cite.
 
-    Returns an empty string when ``sources`` is empty so the rendered
-    sentence does not gain a stray parenthetical.
+    For ``tweet:`` IDs we look the hit up so we can prefer the canonical
+    ``https://x.com/{handle}/status/{id}`` URL when the handle is known;
+    when it is not, ``_build_status_url`` falls back to the
+    ``i/status/`` shape so the link is still navigable. For ``url:``
+    cites we surface the literal URL stored in the cite — that is the
+    final URL the fetcher resolved or, when fetching was off, the
+    pre-resolved value the exporter wrote into ``Tweet.urls``.
+    """
+
+    if source.startswith("tweet:"):
+        tweet_id = source[len("tweet:") :]
+        hit = _resolve_hit(tweet_id, hits)
+        handle = _hit_field(hit, "handle") if hit is not None else ""
+        return _build_status_url(handle, tweet_id) or None
+    if source.startswith("url:"):
+        url = source[len("url:") :]
+        return url or None
+    return None
+
+
+def _format_sources(sources: list[str], hits: list[Any]) -> str:
+    """Format a claim's source list as ``(see: [id1](url1), [id2](url2))``.
+
+    Each cite the synthesizer emitted is rewritten as a markdown link
+    when we can resolve a destination URL for it; cites without a
+    resolvable URL are passed through as bare tokens so the reader can
+    still see what the model claimed to use. An empty list produces an
+    empty string so the rendered sentence does not gain a stray
+    parenthetical.
     """
 
     if not sources:
         return ""
-    return f" (see: {', '.join(sources)})"
+    rendered: list[str] = []
+    for raw in sources:
+        url = _link_for_source(raw, hits)
+        if url:
+            rendered.append(f"[{raw}]({url})")
+        else:
+            rendered.append(raw)
+    return f" (see: {', '.join(rendered)})"
 
 
-def _claim_to_sentence(claim: Claim) -> str:
+def _claim_to_sentence(claim: Claim, hits: list[Any]) -> str:
     """Turn a single :class:`Claim` into a sentence with inline source cites."""
 
     text = sanitize_text(claim.text).strip()
-    return f"{text}{_format_sources(list(claim.sources))}"
+    return f"{text}{_format_sources(list(claim.sources), hits)}"
 
 
 def _render_claims_inline(
     claims: list[Claim],
+    hits: list[Any],
     *,
     word_budget: int = _BRIEF_WORD_BUDGET,
 ) -> str:
@@ -167,7 +202,7 @@ def _render_claims_inline(
     parts: list[str] = []
     running = 0
     for claim in claims:
-        sentence = _claim_to_sentence(claim)
+        sentence = _claim_to_sentence(claim, hits)
         sentence_words = len(sentence.split())
         if running + sentence_words > word_budget:
             break
@@ -270,7 +305,7 @@ def _render_brief(
     # ---- Brief paragraph ------------------------------------------------
     lines.append("## Brief")
     if synthesis is not None and synthesis.claims:
-        prose = _render_claims_inline(synthesis.claims)
+        prose = _render_claims_inline(synthesis.claims, hits)
         lines.append(prose if prose else "(no synthesized claims)")
     else:
         # Synthesis-less fallback (e.g. orchestrator skipped the LM
@@ -292,7 +327,7 @@ def _render_brief(
     return "\n".join(lines)
 
 
-def _render_section(section: Section) -> list[str]:
+def _render_section(section: Section, hits: list[Any]) -> list[str]:
     """Render a single :class:`Section` as ``## heading`` plus claim paragraphs."""
 
     heading = sanitize_text(section.heading).strip() or "(untitled section)"
@@ -301,7 +336,7 @@ def _render_section(section: Section) -> list[str]:
         lines.append("(no claims)")
         return lines
     for claim in section.claims:
-        lines.append(_claim_to_sentence(claim))
+        lines.append(_claim_to_sentence(claim, hits))
         lines.append("")
     # Drop the trailing blank line so consecutive sections do not stack
     # double-blank spacers.
@@ -329,7 +364,7 @@ def _render_synthesis(
     # ---- Sections -------------------------------------------------------
     sections = list(synthesis.sections) if synthesis is not None and synthesis.sections else []
     for section in sections:
-        lines.extend(_render_section(section))
+        lines.extend(_render_section(section, hits))
         lines.append("")
 
     # ---- Top entities ---------------------------------------------------

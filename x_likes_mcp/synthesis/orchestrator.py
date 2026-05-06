@@ -219,6 +219,13 @@ def run_report(
     )
 
     # 11) Render --------------------------------------------------------
+    # Inject snippet + handle onto every hit so the renderer can build
+    # canonical ``https://x.com/{handle}/status/{id}`` links instead of
+    # falling back to the bare ``i/status/{id}`` shape. ScoredHit is a
+    # frozen dataclass; ``object.__setattr__`` is the documented escape
+    # hatch the search seam uses for the same purpose.
+    _inject_hit_metadata(fused_hits, index)
+
     markdown = render_report(
         shape,
         options,
@@ -486,6 +493,24 @@ def _hit_handle(hit: ScoredHit, index: TweetIndex) -> str:
     if tweet is None or tweet.user is None:
         return ""
     return str(tweet.user.screen_name or "")
+
+
+def _inject_hit_metadata(hits: list[ScoredHit], index: TweetIndex) -> None:
+    """Best-effort attach ``handle`` and ``snippet`` to each hit in place.
+
+    The orchestrator's leaf modules (entities, KG seed, fenced context)
+    already cope with hits that may or may not carry these injected
+    fields; the renderer is what relies on them to build canonical
+    x.com URLs and per-anchor snippets. Using ``object.__setattr__``
+    keeps :class:`ScoredHit`'s frozen-dataclass invariant honoured for
+    every other touch point.
+    """
+
+    for hit in hits:
+        if not getattr(hit, "handle", None):
+            object.__setattr__(hit, "handle", _hit_handle(hit, index))
+        if not getattr(hit, "snippet", None):
+            object.__setattr__(hit, "snippet", _hit_text(hit, index))
 
 
 def _populate_kg_from_hits(
