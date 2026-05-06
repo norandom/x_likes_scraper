@@ -35,6 +35,7 @@ from .compiled import load_compiled
 from .context import FencingBudget, build_fenced_context
 from .dspy_modules import (
     SynthesisError,
+    SynthesisResult,
     SynthesisValidationError,
     configure_lm,
     extract_entities,
@@ -166,29 +167,12 @@ def run_report(
     """
 
     # 1) Validation (no side effects yet) --------------------------------
-    try:
-        shape = parse_report_shape(options.shape)
-    except ValueError as exc:
-        raise OrchestratorError("invalid_input", str(exc)) from exc
-
-    try:
-        validate_hops(options.hops, max_hops=config.synthesis_max_hops)
-    except HopsOutOfRange as exc:
-        raise OrchestratorError("invalid_input", str(exc)) from exc
-
-    # ``year`` is a positive int or ``None``; the index handles the rest
-    # of the filter validation but a negative year here would later
-    # surface as a confusing search miss, so reject it early.
-    if options.year is not None and options.year <= 0:
-        raise OrchestratorError(
-            "invalid_input",
-            f"year={options.year} is not a positive integer",
-        )
+    shape = _validate_options(options, config)
 
     # 2) Round-1 search --------------------------------------------------
     hits_round_one = run_round_one(index, options)
 
-    # 3) Empty corpus shortcut (Req 9.4) --------------------------------
+    # 3) Empty corpus shortcut (Req 9.4) -- must NOT touch the LM endpoint.
     if not hits_round_one:
         markdown = render_empty_report(options)
         return ReportResult(
@@ -206,108 +190,23 @@ def run_report(
         raise OrchestratorError("config", str(exc)) from exc
 
     # 5) Build round-1 KG -----------------------------------------------
-    kg = KG()
-    kg.add_node(Node(id=query_id(), kind=NodeKind.QUERY, label=options.query, weight=1.0))
-    _populate_kg_from_hits(
-        kg=kg,
-        hits=hits_round_one,
-        index=index,
-        edge_kind=EdgeKind.RECALL_FOR,
-    )
+    kg = _build_round_one_kg(options.query, hits_round_one, index)
 
     # 6) Round-2 fan-out (if hops==2) -----------------------------------
-    if options.hops >= 2:
-        hits_round_two = run_round_two(
-            index,
-            options,
-            kg,
-            k=config.synthesis_round_two_k,
-        )
-        fused_hits = fuse_results(hits_round_one, hits_round_two)
-        # Extend the KG with round-2 entities so the synthesizer benefits
-        # from a richer graph; round-2 hits not already in round-1 still
-        # contribute their entities.
-        round_two_only = [
-            hit
-            for hit in hits_round_two
-            if hit.tweet_id not in {h.tweet_id for h in hits_round_one}
-        ]
-        if round_two_only:
-            _populate_kg_from_hits(
-                kg=kg,
-                hits=round_two_only,
-                index=index,
-                edge_kind=EdgeKind.RECALL_FOR,
-            )
-    else:
-        fused_hits = hits_round_one
+    fused_hits = _run_round_two_phase(index, options, kg, hits_round_one, config)
 
     # 7) Optional URL fetch (Req 3.1, 3.2, 12.4) ------------------------
-    fetched_urls: list[FetchedUrl] = []
-    if options.fetch_urls:
-        try:
-            probe_container(config.crawl4ai_base_url)
-        except ContainerUnreachable as exc:
-            raise OrchestratorError(
-                "upstream",
-                f"crawl4ai container unreachable: {exc}",
-            ) from exc
+    fetched_urls = _fetch_phase(options, fused_hits, config, index)
 
-        cache = UrlCache(config.url_cache_dir, ttl_days=config.url_cache_ttl_days)
-        urls = _collect_urls(fused_hits, index)
-        if urls:
-            fetched_urls = fetch_all(
-                urls,
-                crawl4ai_base_url=config.crawl4ai_base_url,
-                cache=cache,
-                max_body_bytes=config.synthesis_per_source_bytes,
-                private_allowlist=config.url_fetch_allowed_private_cidrs,
-            )
-
-    # 8) Build fenced synthesis context ---------------------------------
-    budget = FencingBudget(
-        per_url_body_bytes=config.synthesis_per_source_bytes,
-        total_bytes=config.synthesis_total_context_bytes,
+    # 8-10) Build fenced context, load compiled program, run synthesis. -
+    synthesis_result = _synthesize_phase(
+        options=options,
+        shape=shape,
+        fused_hits=fused_hits,
+        fetched_urls=fetched_urls,
+        kg=kg,
+        config=config,
     )
-    fenced_blob, known_source_ids = build_fenced_context(
-        options.query,
-        shape,
-        list(fused_hits),
-        list(fetched_urls),
-        kg,
-        budget,
-    )
-
-    # 9) Load compiled program (Req 6.3) -------------------------------
-    compiled_root = config.output_dir / "synthesis_compiled"
-    program = load_compiled(shape, compiled_root)
-
-    # 10) Run synthesis (Req 1.1) --------------------------------------
-    month_buckets: list[str] | None = None
-    if shape is ReportShape.TREND:
-        month_buckets = sorted(
-            {ym for hit in fused_hits if (ym := getattr(hit, "year_month", None))}
-        )
-
-    try:
-        synthesis_result = synthesize(
-            shape,
-            options.query,
-            fenced_blob,
-            known_source_ids=known_source_ids,
-            month_buckets=month_buckets,
-            program=program,
-        )
-    except SynthesisValidationError as exc:
-        raise OrchestratorError(
-            "validation",
-            f"synthesis validation failed: {exc}",
-        ) from exc
-    except SynthesisError as exc:
-        raise OrchestratorError(
-            "upstream",
-            f"synthesis call failed: {exc}",
-        ) from exc
 
     # 11) Render --------------------------------------------------------
     markdown = render_report(
@@ -332,6 +231,174 @@ def run_report(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _validate_options(options: ReportOptions, config: Config) -> ReportShape:
+    """Parse the report shape, validate hops + year, raise OrchestratorError on bad input."""
+
+    try:
+        shape = parse_report_shape(options.shape)
+    except ValueError as exc:
+        raise OrchestratorError("invalid_input", str(exc)) from exc
+
+    try:
+        validate_hops(options.hops, max_hops=config.synthesis_max_hops)
+    except HopsOutOfRange as exc:
+        raise OrchestratorError("invalid_input", str(exc)) from exc
+
+    # ``year`` is a positive int or ``None``; the index handles the rest
+    # of the filter validation but a negative year here would later
+    # surface as a confusing search miss, so reject it early.
+    if options.year is not None and options.year <= 0:
+        raise OrchestratorError(
+            "invalid_input",
+            f"year={options.year} is not a positive integer",
+        )
+    return shape
+
+
+def _build_round_one_kg(
+    query: str,
+    hits_round_one: list[ScoredHit],
+    index: TweetIndex,
+) -> KG:
+    """Build a fresh KG seeded with the query node and round-1 hit entities."""
+
+    kg = KG()
+    kg.add_node(Node(id=query_id(), kind=NodeKind.QUERY, label=query, weight=1.0))
+    _populate_kg_from_hits(
+        kg=kg,
+        hits=hits_round_one,
+        index=index,
+        edge_kind=EdgeKind.RECALL_FOR,
+    )
+    return kg
+
+
+def _run_round_two_phase(
+    index: TweetIndex,
+    options: ReportOptions,
+    kg: KG,
+    hits_round_one: list[ScoredHit],
+    config: Config,
+) -> list[ScoredHit]:
+    """Run the round-2 fan-out when ``hops>=2`` and enrich the KG with new hits."""
+
+    if options.hops < 2:
+        return hits_round_one
+
+    hits_round_two = run_round_two(
+        index,
+        options,
+        kg,
+        k=config.synthesis_round_two_k,
+    )
+    fused_hits = fuse_results(hits_round_one, hits_round_two)
+    # Extend the KG with round-2 entities so the synthesizer benefits
+    # from a richer graph; round-2 hits not already in round-1 still
+    # contribute their entities.
+    round_two_only = [
+        hit for hit in hits_round_two if hit.tweet_id not in {h.tweet_id for h in hits_round_one}
+    ]
+    if round_two_only:
+        _populate_kg_from_hits(
+            kg=kg,
+            hits=round_two_only,
+            index=index,
+            edge_kind=EdgeKind.RECALL_FOR,
+        )
+    return fused_hits
+
+
+def _fetch_phase(
+    options: ReportOptions,
+    fused_hits: list[ScoredHit],
+    config: Config,
+    index: TweetIndex,
+) -> list[FetchedUrl]:
+    """Probe crawl4ai and fetch the per-hit URL set when ``fetch_urls=True``."""
+
+    if not options.fetch_urls:
+        return []
+
+    try:
+        probe_container(config.crawl4ai_base_url)
+    except ContainerUnreachable as exc:
+        raise OrchestratorError(
+            "upstream",
+            f"crawl4ai container unreachable: {exc}",
+        ) from exc
+
+    cache = UrlCache(config.url_cache_dir, ttl_days=config.url_cache_ttl_days)
+    urls = _collect_urls(fused_hits, index)
+    if not urls:
+        return []
+    return fetch_all(
+        urls,
+        crawl4ai_base_url=config.crawl4ai_base_url,
+        cache=cache,
+        max_body_bytes=config.synthesis_per_source_bytes,
+        private_allowlist=config.url_fetch_allowed_private_cidrs,
+    )
+
+
+def _synthesize_phase(
+    *,
+    options: ReportOptions,
+    shape: ReportShape,
+    fused_hits: list[ScoredHit],
+    fetched_urls: list[FetchedUrl],
+    kg: KG,
+    config: Config,
+) -> SynthesisResult:
+    """Build fenced context, load the compiled program, and call synthesize.
+
+    Translates :class:`SynthesisValidationError` and :class:`SynthesisError`
+    into :class:`OrchestratorError` ``"validation"`` and ``"upstream"``
+    categories respectively.
+    """
+
+    budget = FencingBudget(
+        per_url_body_bytes=config.synthesis_per_source_bytes,
+        total_bytes=config.synthesis_total_context_bytes,
+    )
+    fenced_blob, known_source_ids = build_fenced_context(
+        options.query,
+        shape,
+        list(fused_hits),
+        list(fetched_urls),
+        kg,
+        budget,
+    )
+
+    compiled_root = config.output_dir / "synthesis_compiled"
+    program = load_compiled(shape, compiled_root)
+
+    month_buckets: list[str] | None = None
+    if shape is ReportShape.TREND:
+        month_buckets = sorted(
+            {ym for hit in fused_hits if (ym := getattr(hit, "year_month", None))}
+        )
+
+    try:
+        return synthesize(
+            shape,
+            options.query,
+            fenced_blob,
+            known_source_ids=known_source_ids,
+            month_buckets=month_buckets,
+            program=program,
+        )
+    except SynthesisValidationError as exc:
+        raise OrchestratorError(
+            "validation",
+            f"synthesis validation failed: {exc}",
+        ) from exc
+    except SynthesisError as exc:
+        raise OrchestratorError(
+            "upstream",
+            f"synthesis call failed: {exc}",
+        ) from exc
 
 
 def _hit_text(hit: ScoredHit, index: TweetIndex) -> str:

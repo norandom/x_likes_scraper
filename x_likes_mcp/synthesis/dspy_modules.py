@@ -245,6 +245,46 @@ class SynthesisResult:
 # ---------------------------------------------------------------------------
 
 
+def _collect_brief_sources(claims: Any) -> list[str]:
+    """Return cited source IDs from BRIEF claims, preserving order, deduped."""
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for claim in claims or []:
+        for source in claim.sources:
+            if source not in seen:
+                seen.add(source)
+                out.append(source)
+    return out
+
+
+def _collect_narrative_sources(sections: Any) -> list[str]:
+    """Return cited source IDs from SYNTHESIS sections, preserving order, deduped."""
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for section in sections or []:
+        for claim in section.claims:
+            for source in claim.sources:
+                if source not in seen:
+                    seen.add(source)
+                    out.append(source)
+    return out
+
+
+def _collect_trend_sources(per_month: Any) -> list[str]:
+    """Return anchor-tweet IDs from TREND months, preserving order, deduped."""
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for month in per_month or []:
+        for anchor in month.anchor_tweets:
+            if anchor not in seen:
+                seen.add(anchor)
+                out.append(anchor)
+    return out
+
+
 def _collect_unknown_sources(
     *,
     shape: ReportShape,
@@ -259,28 +299,15 @@ def _collect_unknown_sources(
     are collapsed so the corrective-feedback message is stable.
     """
 
-    seen: set[str] = set()
-    bad: list[str] = []
-
-    def _add(candidate: str) -> None:
-        if candidate not in known_source_ids and candidate not in seen:
-            seen.add(candidate)
-            bad.append(candidate)
-
     if shape is ReportShape.BRIEF:
-        for claim in getattr(prediction, "claims", []) or []:
-            for source in claim.sources:
-                _add(source)
+        cited = _collect_brief_sources(getattr(prediction, "claims", []))
     elif shape is ReportShape.SYNTHESIS:
-        for section in getattr(prediction, "sections", []) or []:
-            for claim in section.claims:
-                for source in claim.sources:
-                    _add(source)
+        cited = _collect_narrative_sources(getattr(prediction, "sections", []))
     elif shape is ReportShape.TREND:
-        for month in getattr(prediction, "per_month", []) or []:
-            for anchor in month.anchor_tweets:
-                _add(anchor)
-    return bad
+        cited = _collect_trend_sources(getattr(prediction, "per_month", []))
+    else:
+        return []
+    return [sid for sid in cited if sid not in known_source_ids]
 
 
 def _build_inputs(

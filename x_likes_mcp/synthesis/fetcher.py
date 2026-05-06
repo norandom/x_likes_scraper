@@ -245,9 +245,9 @@ def fetch_url(
     """
 
     # 1) Cache hit short-circuits everything.
-    cached = cache.get(url)
+    cached = _lookup_cache(cache, url)
     if cached is not None:
-        return _fetched_from_cache(cached)
+        return cached
 
     # 2) Scheme guard.
     cleaned_url = safe_http_url(url)
@@ -272,91 +272,35 @@ def fetch_url(
         client = httpx.Client(timeout=timeout)
 
     try:
-        crawl_endpoint = f"{crawl4ai_base_url.rstrip('/')}/crawl"
-        try:
-            response = client.post(
-                crawl_endpoint,
-                json={
-                    "urls": [cleaned_url],
-                    "screenshot": False,
-                    "extract_markdown": True,
-                },
-                timeout=timeout,
-            )
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPError):
-            return None
-
-        if response.status_code >= 400:
-            return None
-
-        try:
-            envelope = response.json()
-        except (ValueError, json.JSONDecodeError):
-            return None
-
-        result = _first_result(envelope)
+        result = _post_crawl(client, crawl4ai_base_url, cleaned_url, timeout)
         if result is None:
             return None
 
-        final_url = str(result.get("final_url") or cleaned_url)
-        content_type_raw = str(result.get("content_type") or "text/html")
-        markdown_raw = result.get("markdown")
-        redirect_chain = result.get("redirect_chain") or []
-
-        # 5) Redirect chain re-validation. Cap at MAX_REDIRECTS.
-        if isinstance(redirect_chain, list):
-            if len(redirect_chain) > MAX_REDIRECTS:
-                return None
-            for hop in redirect_chain:
-                if not isinstance(hop, str):
-                    return None
-                if not _ssrf_ok(hop, private_allowlist, _resolver):
-                    return None
-
-        # Always re-check the reported final URL (some crawl4ai
-        # versions report ``final_url`` without populating
-        # ``redirect_chain``).
-        if final_url != cleaned_url and not _ssrf_ok(final_url, private_allowlist, _resolver):
+        # 5) Redirect chain + final_url re-validation.
+        final_url = _revalidate_chain(result, cleaned_url, private_allowlist, _resolver)
+        if final_url is None:
             return None
 
         # 6) Content-type allowlist.
-        content_type = content_type_raw.split(";")[0].strip().lower()
+        content_type = _extract_content_type(result)
         if content_type not in ALLOWED_CONTENT_TYPES:
             return None
 
         # 7) Markdown body must be a non-empty string.
+        markdown_raw = result.get("markdown")
         if not isinstance(markdown_raw, str) or not markdown_raw:
             if content_type == "application/pdf":
                 _log.debug("crawl4ai returned empty markdown for PDF %s", cleaned_url)
             return None
 
-        sanitized = sanitize_text(markdown_raw)
-        if not sanitized:
-            return None
-
-        truncated = _truncate_utf8(sanitized, max_body_bytes)
-
-        # 8) Cache + return.
-        entry = CachedUrl(
-            url=cleaned_url,
+        # 8) Sanitize, truncate, cache, return.
+        return _persist_to_cache(
+            cache=cache,
+            cleaned_url=cleaned_url,
             final_url=final_url,
             content_type=content_type,
-            sanitized_markdown=truncated,
-            fetched_at=time.time(),
-        )
-        try:
-            cache.put(entry)
-        except OSError:
-            # A cache write failure must not turn into a hard error;
-            # the body is still usable for this run.
-            _log.debug("url cache write failed for %s", cleaned_url)
-
-        return FetchedUrl(
-            url=cleaned_url,
-            final_url=final_url,
-            content_type=content_type,
-            sanitized_markdown=truncated,
-            size_bytes=len(truncated.encode("utf-8")),
+            markdown_raw=markdown_raw,
+            max_body_bytes=max_body_bytes,
         )
     finally:
         if owns_client and isinstance(client, httpx.Client):
@@ -436,6 +380,135 @@ def fetch_all(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _lookup_cache(cache: UrlCache, url: str) -> FetchedUrl | None:
+    """Return the cached entry for ``url`` projected onto :class:`FetchedUrl`, else None."""
+
+    cached = cache.get(url)
+    if cached is None:
+        return None
+    return _fetched_from_cache(cached)
+
+
+def _post_crawl(
+    client: _SupportsPost,
+    crawl4ai_base_url: str,
+    cleaned_url: str,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """POST one URL to crawl4ai and return the first parsed result dict.
+
+    Soft-drops on transport errors, 4xx/5xx, malformed JSON, or an empty
+    ``results`` list. Returns ``None`` on every failure mode.
+    """
+
+    crawl_endpoint = f"{crawl4ai_base_url.rstrip('/')}/crawl"
+    try:
+        response = client.post(
+            crawl_endpoint,
+            json={
+                "urls": [cleaned_url],
+                "screenshot": False,
+                "extract_markdown": True,
+            },
+            timeout=timeout,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPError):
+        return None
+
+    if response.status_code >= 400:
+        return None
+
+    try:
+        envelope = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+    return _first_result(envelope)
+
+
+def _revalidate_chain(
+    result: dict[str, Any],
+    cleaned_url: str,
+    private_allowlist: Sequence[IPNetwork],
+    resolver: _Resolver,
+) -> str | None:
+    """Re-validate the redirect chain + final_url against the SSRF guard.
+
+    Returns the validated ``final_url`` on success or ``None`` if any
+    hop is blocked, the chain exceeds :data:`MAX_REDIRECTS`, or a hop is
+    not a string.
+    """
+
+    final_url = str(result.get("final_url") or cleaned_url)
+    redirect_chain = result.get("redirect_chain") or []
+
+    if isinstance(redirect_chain, list):
+        if len(redirect_chain) > MAX_REDIRECTS:
+            return None
+        for hop in redirect_chain:
+            if not isinstance(hop, str):
+                return None
+            if not _ssrf_ok(hop, private_allowlist, resolver):
+                return None
+
+    # Always re-check the reported final URL (some crawl4ai versions
+    # report ``final_url`` without populating ``redirect_chain``).
+    if final_url != cleaned_url and not _ssrf_ok(final_url, private_allowlist, resolver):
+        return None
+    return final_url
+
+
+def _extract_content_type(result: dict[str, Any]) -> str:
+    """Read ``content_type`` from a crawl4ai result, normalized to lower-case base type."""
+
+    content_type_raw = str(result.get("content_type") or "text/html")
+    return content_type_raw.split(";")[0].strip().lower()
+
+
+def _persist_to_cache(
+    *,
+    cache: UrlCache,
+    cleaned_url: str,
+    final_url: str,
+    content_type: str,
+    markdown_raw: str,
+    max_body_bytes: int,
+) -> FetchedUrl | None:
+    """Sanitize + truncate the body, write the cache entry, return :class:`FetchedUrl`.
+
+    Returns ``None`` when sanitization yields an empty string. A cache
+    write failure is logged but does not abort the fetch.
+    """
+
+    sanitized = sanitize_text(markdown_raw)
+    if not sanitized:
+        return None
+
+    truncated = _truncate_utf8(sanitized, max_body_bytes)
+
+    entry = CachedUrl(
+        url=cleaned_url,
+        final_url=final_url,
+        content_type=content_type,
+        sanitized_markdown=truncated,
+        fetched_at=time.time(),
+    )
+    try:
+        cache.put(entry)
+    except OSError:
+        # A cache write failure must not turn into a hard error;
+        # the body is still usable for this run.
+        _log.debug("url cache write failed for %s", cleaned_url)
+
+    return FetchedUrl(
+        url=cleaned_url,
+        final_url=final_url,
+        content_type=content_type,
+        sanitized_markdown=truncated,
+        size_bytes=len(truncated.encode("utf-8")),
+    )
 
 
 def _fetched_from_cache(cached: CachedUrl) -> FetchedUrl:
