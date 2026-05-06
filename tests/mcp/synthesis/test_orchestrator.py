@@ -146,12 +146,14 @@ def _options(
     shape: ReportShape = ReportShape.BRIEF,
     fetch_urls: bool = False,
     hops: int = 1,
+    filter_entities: bool = False,
 ) -> ReportOptions:
     return ReportOptions(
         query=query,
         shape=shape,
         fetch_urls=fetch_urls,
         hops=hops,
+        filter_entities=filter_entities,
     )
 
 
@@ -715,3 +717,132 @@ def test_round_2_kg_uses_round_1_entities_only(
     # handle "bob" is not yet in the graph.
     assert "handle:alice" in snapshot
     assert "handle:bob" not in snapshot
+
+
+# ---------------------------------------------------------------------------
+# LM-backed entity-relevance filter (Layer 2)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_entities_off_by_default_does_not_call_lm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``filter_entities=False`` (the default) leaves the KG untouched
+    and does not call ``filter_entities_by_relevance``."""
+
+    hits1 = [_scored_hit("1", snippet="alpha @alice")]
+    state = _install_default_stubs(monkeypatch, round_one=hits1)
+    config = _config(tmp_path)
+    index = _FakeIndex({"1": _FakeTweet(tweet_id="1", text="alpha @alice")})
+
+    filter_calls: list[tuple[str, list[str]]] = []
+
+    def _spy_filter(query: str, candidates: list[str]) -> list[str]:
+        filter_calls.append((query, list(candidates)))
+        return list(candidates)
+
+    monkeypatch.setattr(orchestrator, "filter_entities_by_relevance", _spy_filter)
+
+    rc = run_report(index, _options(filter_entities=False), config=config)
+    assert rc is not None
+    assert filter_calls == []
+    assert state["round_one_calls"]
+
+
+def test_filter_entities_true_drops_excluded_entity_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the LM omits ``elonmusk`` from the relevant set, the KG
+    handed to the synthesis phase has no ``handle:elonmusk`` node."""
+
+    # Two hits: one mentions @alice (relevant), the other @elonmusk
+    # (the LM will mark off-topic).
+    hits1 = [
+        _scored_hit("1", snippet="quant alpha @alice"),
+        _scored_hit("2", snippet="off topic @elonmusk", handle="elonmusk"),
+    ]
+
+    # Install standard stubs but override extract_regex so each hit
+    # contributes its own handle entity.
+    def _hit_specific_extract(text: str, _url_bodies: list[str]) -> list[Entity]:
+        if "alice" in text:
+            return [Entity(EntityKind.HANDLE, "alice", 1.0)]
+        if "elonmusk" in text:
+            return [Entity(EntityKind.HANDLE, "elonmusk", 1.0)]
+        return []
+
+    state = _install_default_stubs(
+        monkeypatch,
+        round_one=hits1,
+        extract_regex_impl=_hit_specific_extract,
+    )
+
+    # Filter LM keeps only "alice".
+    def _filter(query: str, candidates: list[str]) -> list[str]:
+        return [c for c in candidates if c == "alice"]
+
+    monkeypatch.setattr(orchestrator, "filter_entities_by_relevance", _filter)
+
+    config = _config(tmp_path)
+    index = _FakeIndex(
+        {
+            "1": _FakeTweet(tweet_id="1", text="quant alpha @alice"),
+            "2": _FakeTweet(tweet_id="2", text="off topic @elonmusk", screen_name="elonmusk"),
+        }
+    )
+
+    run_report(index, _options(filter_entities=True), config=config)
+
+    # The synthesis stub recorded its inputs; the fenced-context blob
+    # is what we assert against. We check the ENTITY fence specifically
+    # because the tweet body itself ("off topic @elonmusk") is still in
+    # the TWEET_BODY fence — only the entity-node surface is filtered.
+    assert state["synthesize_calls"], "synthesize was never called"
+    blob = state["synthesize_calls"][0]["fenced_context"]
+    assert "<<<ENTITY>>>alice<<<END_ENTITY>>>" in blob
+    assert "<<<ENTITY>>>elonmusk<<<END_ENTITY>>>" not in blob
+
+
+def test_filter_entities_true_with_no_entities_skips_lm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty entity set short-circuits to a no-op filter call.
+
+    The hit's handle is empty AND the regex extractor returns nothing
+    AND the DSPy fallback is stubbed to ``[]``, so no HANDLE / HASHTAG
+    / DOMAIN / CONCEPT node ever lands in the KG.
+    """
+
+    hits1 = [_scored_hit("1", snippet="just text no entities", handle="")]
+
+    def _no_entities(_text: str, _url_bodies: list[str]) -> list[Entity]:
+        return []
+
+    state = _install_default_stubs(
+        monkeypatch,
+        round_one=hits1,
+        extract_regex_impl=_no_entities,
+    )
+
+    filter_calls: list[tuple[str, list[str]]] = []
+
+    def _spy_filter(query: str, candidates: list[str]) -> list[str]:
+        filter_calls.append((query, list(candidates)))
+        return list(candidates)
+
+    monkeypatch.setattr(orchestrator, "filter_entities_by_relevance", _spy_filter)
+    # Stub the DSPy fallback to also return [] so the orchestrator
+    # cannot inject entities the filter would have to handle.
+    monkeypatch.setattr(orchestrator, "extract_entities", lambda _t, **_kw: [])
+
+    config = _config(tmp_path)
+    index = _FakeIndex({"1": _FakeTweet(tweet_id="1", text="just text", screen_name="")})
+
+    run_report(index=index, options=_options(filter_entities=True), config=config)
+
+    # No filterable entities -> no LM call.
+    assert filter_calls == []
+    assert state["synthesize_calls"]

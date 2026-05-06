@@ -38,7 +38,11 @@ class ReportOptions:
 
     The defaults match the design's orchestrator service interface:
     ``fetch_urls`` is off by default (Req 4.7), ``hops`` is 1 (Req 2.4),
-    and ``limit`` matches the existing search default.
+    ``filter_entities`` is off by default so existing test fixtures and
+    callers that have not opted in keep their current behavior, and
+    ``limit`` matches the existing search default. The CLI ``--report``
+    mode flips ``filter_entities`` to True by default; ``--kg`` keeps it
+    False (no LM available there).
     """
 
     query: str
@@ -49,6 +53,7 @@ class ReportOptions:
     month_start: str | None = None
     month_end: str | None = None
     limit: int = 50
+    filter_entities: bool = False
 
 
 @dataclass(frozen=True)

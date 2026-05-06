@@ -192,6 +192,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "disable the filter."
         ),
     )
+    parser.add_argument(
+        "--filter-entities",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="filter_entities",
+        help=(
+            "Run the LM-backed entity-relevance filter "
+            "(synthesis.dspy_modules.FilterEntitiesByRelevance) over the "
+            "round-1 KG before round-2 fan-out. Defaults to ON for "
+            "--report and --report-optimize, OFF for --kg (no LM call "
+            "in --kg mode). Use --no-filter-entities to disable for "
+            "--report; --filter-entities to enable for --kg "
+            "(requires OPENAI_BASE_URL configured)."
+        ),
+    )
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month-start", default=None, dest="month_start")
     parser.add_argument("--month-end", default=None, dest="month_end")
@@ -329,6 +344,11 @@ def _run_report(index: TweetIndex, args: argparse.Namespace) -> int:
         print(f"x_likes_mcp: invalid report shape: {exc}", file=sys.stderr)
         return 2
 
+    # Default for --report is filter-entities=True (LM available, noise
+    # filter is the whole point of LM-backed synthesis). The user can
+    # turn it off with --no-filter-entities when prompt-cost matters.
+    filter_entities = True if args.filter_entities is None else bool(args.filter_entities)
+
     options = ReportOptions(
         query=query,
         shape=shape,
@@ -338,6 +358,7 @@ def _run_report(index: TweetIndex, args: argparse.Namespace) -> int:
         month_start=args.month_start,
         month_end=args.month_end,
         limit=int(args.limit),
+        filter_entities=filter_entities,
     )
 
     try:

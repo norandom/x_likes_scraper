@@ -37,6 +37,7 @@ from x_likes_mcp.config import Config, ConfigError, RankerWeights
 from x_likes_mcp.synthesis.dspy_modules import (
     _SYSTEM_PROMPT_RULES,
     ExtractEntities,
+    FilterEntitiesByRelevance,
     SynthesisError,
     SynthesisResult,
     SynthesisValidationError,
@@ -45,6 +46,7 @@ from x_likes_mcp.synthesis.dspy_modules import (
     SynthesizeTrend,
     configure_lm,
     extract_entities,
+    filter_entities_by_relevance,
     make_synthesizer,
     synthesize,
 )
@@ -469,3 +471,87 @@ def test_extract_entities_signature_class_present() -> None:
     """The ``ExtractEntities`` signature must be a DSPy signature subclass."""
 
     assert issubclass(ExtractEntities, dspy.Signature)
+
+
+# ---------------------------------------------------------------------------
+# filter_entities_by_relevance (LM-backed KG noise filter)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_entities_signature_class_present() -> None:
+    assert issubclass(FilterEntitiesByRelevance, dspy.Signature)
+
+
+def test_filter_entities_signature_carries_system_prompt_rules() -> None:
+    """The three fence-discipline rules must ride with every filter call
+    via the signature ``__doc__``."""
+
+    doc = FilterEntitiesByRelevance.__doc__ or ""
+    assert _SYSTEM_PROMPT_RULES in doc
+
+
+def test_filter_entities_empty_short_circuits_without_lm() -> None:
+    """Empty candidate list returns ``[]`` without invoking the program."""
+
+    program = _FakeProgram([])  # would IndexError if called
+    assert filter_entities_by_relevance("query", [], program=program) == []
+    assert program.calls == []
+
+
+def test_filter_entities_single_candidate_short_circuits() -> None:
+    """A single-candidate input is its own pass-through."""
+
+    program = _FakeProgram([])  # would IndexError if called
+    assert filter_entities_by_relevance("query", ["only_handle"], program=program) == [
+        "only_handle"
+    ]
+    assert program.calls == []
+
+
+def test_filter_entities_drops_candidates_lm_omits() -> None:
+    """Candidates the LM omits from the relevant list are dropped."""
+
+    program = _FakeProgram([dspy.Prediction(relevant=["alpha", "beta"])])
+
+    out = filter_entities_by_relevance(
+        "query",
+        ["alpha", "beta", "gamma"],
+        program=program,
+    )
+
+    assert out == ["alpha", "beta"]
+
+
+def test_filter_entities_drops_hallucinated_labels() -> None:
+    """Items the LM returns that were not in the original candidate set
+    are silently dropped — a hallucinated entity must not slip in."""
+
+    program = _FakeProgram([dspy.Prediction(relevant=["alpha", "fabricated"])])
+
+    out = filter_entities_by_relevance(
+        "query",
+        ["alpha", "beta"],
+        program=program,
+    )
+
+    assert out == ["alpha"]
+
+
+def test_filter_entities_dedupes_repeated_lm_output() -> None:
+    program = _FakeProgram([dspy.Prediction(relevant=["alpha", "alpha", "beta"])])
+    out = filter_entities_by_relevance(
+        "query",
+        ["alpha", "beta", "gamma"],
+        program=program,
+    )
+    assert out == ["alpha", "beta"]
+
+
+def test_filter_entities_preserves_lm_order() -> None:
+    program = _FakeProgram([dspy.Prediction(relevant=["gamma", "alpha"])])
+    out = filter_entities_by_relevance(
+        "query",
+        ["alpha", "beta", "gamma"],
+        program=program,
+    )
+    assert out == ["gamma", "alpha"]

@@ -248,6 +248,24 @@ class KG:
 
     # -- queries ----------------------------------------------------------
 
+    def nodes(self) -> list[Node]:
+        """Return every node in insertion order.
+
+        Read-only snapshot — mutating the returned list does not change
+        the graph. The orchestrator's relevance filter and serialization
+        code use this in preference to the private ``_nodes`` dict.
+        """
+
+        return list(self._nodes.values())
+
+    def edges(self) -> list[Edge]:
+        """Return every edge in insertion order.
+
+        Read-only snapshot — same contract as :meth:`nodes`.
+        """
+
+        return list(self._edges)
+
     def top_entities(self, kind: NodeKind, n: int) -> list[Node]:
         """Return up to ``n`` nodes of ``kind`` sorted by weight desc.
 

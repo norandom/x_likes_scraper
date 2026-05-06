@@ -39,6 +39,7 @@ from .dspy_modules import (
     SynthesisValidationError,
     configure_lm,
     extract_entities,
+    filter_entities_by_relevance,
     synthesize,
 )
 from .entities import extract_regex
@@ -192,6 +193,15 @@ def run_report(
     # 5) Build round-1 KG -----------------------------------------------
     kg = _build_round_one_kg(options.query, hits_round_one, index)
 
+    # 5a) Optional LM-backed entity-relevance filter --------------------
+    # Keeps off-topic handles / hashtags / domains / concepts from
+    # seeding round-2 fan-out and from polluting the synthesis context.
+    # Gated by options.filter_entities so existing callers and the
+    # offline test fixtures that do not stub filter_entities_by_relevance
+    # keep their current behavior.
+    if options.filter_entities:
+        kg = _filter_kg_by_relevance(options.query, kg)
+
     # 6) Round-2 fan-out (if hops==2) -----------------------------------
     fused_hits = _run_round_two_phase(index, options, kg, hits_round_one, config)
 
@@ -255,6 +265,54 @@ def _validate_options(options: ReportOptions, config: Config) -> ReportShape:
             f"year={options.year} is not a positive integer",
         )
     return shape
+
+
+_FILTERABLE_NODE_KINDS: frozenset[NodeKind] = frozenset(
+    {NodeKind.HANDLE, NodeKind.HASHTAG, NodeKind.DOMAIN, NodeKind.CONCEPT}
+)
+
+
+def _filter_kg_by_relevance(query: str, kg: KG) -> KG:
+    """Return a new KG that keeps only entity nodes the LM marks relevant.
+
+    Calls :func:`filter_entities_by_relevance` once over the union of
+    HANDLE / HASHTAG / DOMAIN / CONCEPT labels in ``kg`` and rebuilds a
+    fresh KG containing the QUERY root, every TWEET node, and only the
+    entity nodes whose labels survived the LM pass. Edges that touch a
+    dropped node are dropped with it.
+
+    Hallucinated labels (anything the LM returns that was not in the
+    candidate set) are ignored — :func:`filter_entities_by_relevance`
+    already filters them, but the post-filter ``relevant_set`` check
+    here is the second line of defense. Empty / single-candidate KGs
+    short-circuit through the no-op fast path inside
+    :func:`filter_entities_by_relevance`.
+    """
+
+    candidates_with_id: list[tuple[str, str]] = []
+    for node in kg.nodes():
+        if node.kind in _FILTERABLE_NODE_KINDS:
+            candidates_with_id.append((node.label, node.id))
+
+    if not candidates_with_id:
+        return kg
+
+    candidate_labels = [label for label, _ in candidates_with_id]
+    relevant_labels = filter_entities_by_relevance(query, candidate_labels)
+    relevant_set = set(relevant_labels)
+
+    keep_ids: set[str] = {node_id for label, node_id in candidates_with_id if label in relevant_set}
+
+    new_kg = KG()
+    for node in kg.nodes():
+        if node.kind in (NodeKind.QUERY, NodeKind.TWEET) or node.id in keep_ids:
+            new_kg.add_node(node)
+
+    surviving_ids = {n.id for n in new_kg.nodes()}
+    for edge in kg.edges():
+        if edge.src in surviving_ids and edge.dst in surviving_ids:
+            new_kg.add_edge(edge)
+    return new_kg
 
 
 def _build_round_one_kg(
