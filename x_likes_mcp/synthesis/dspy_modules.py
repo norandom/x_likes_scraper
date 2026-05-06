@@ -505,7 +505,7 @@ def filter_entities_by_relevance(
     The result preserves the order in which the LM returned the items,
     falling back to the original candidate order for unseen items so a
     stable test seam is possible. Candidates the LM invents (not in the
-    original list) are dropped — a hallucinated entity should not slip
+    original list) are dropped: a hallucinated entity should not slip
     into the KG.
     """
 

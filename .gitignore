@@ -37,6 +37,7 @@ output/synthesis_compiled/
 *.md
 !README.md
 !QUICKSTART.md
+!examples/*.md
 *.html
 media/
 

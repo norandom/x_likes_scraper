@@ -183,7 +183,7 @@ def _link_for_source(source: str, hits: list[Any]) -> str | None:
     ``https://x.com/{handle}/status/{id}`` URL when the handle is known;
     when it is not, ``_build_status_url`` falls back to the
     ``i/status/`` shape so the link is still navigable. For ``url:``
-    cites we surface the literal URL stored in the cite — that is the
+    cites we surface the literal URL stored in the cite; that is the
     final URL the fetcher resolved or, when fetching was off, the
     pre-resolved value the exporter wrote into ``Tweet.urls``.
     """
@@ -308,7 +308,7 @@ def _filter_summary(options: ReportOptions) -> str:
 def render_empty_report(options: ReportOptions) -> str:
     """Render the "no matching tweets" report.
 
-    The synthesizer is NOT called — this is the orchestrator's
+    The synthesizer is NOT called; this is the orchestrator's
     short-circuit when the corpus has zero matches. The returned body
     runs through :func:`sanitize_text` once at the end so any control
     codepoints in ``options.query`` cannot leak through the title.
@@ -471,7 +471,7 @@ def _render_trend(
     per_month = list(synthesis.per_month) if synthesis is not None and synthesis.per_month else []
 
     if per_month:
-        # Sort by ``year_month`` lexicographically — YYYY-MM strings sort
+        # Sort by ``year_month`` lexicographically; YYYY-MM strings sort
         # chronologically (Req 8.3).
         for month in sorted(per_month, key=lambda m: m.year_month):
             ym = sanitize_text(month.year_month).strip() or "unknown"
@@ -539,8 +539,8 @@ def render_report(
         Empty list → empty report.
     fetched_urls:
         Already-fetched and already-sanitized URL bodies. Currently
-        unused by the renderer — held for forward compatibility with
-        per-section "sources" listings.
+        unused by the renderer (held for forward compatibility with
+        per-section "sources" listings).
     kg:
         The shared in-memory knowledge graph; only the synthesis and
         trend shapes consume it (for the mindmap).

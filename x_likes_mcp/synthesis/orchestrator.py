@@ -290,7 +290,7 @@ def _filter_kg_by_relevance(query: str, kg: KG) -> KG:
     dropped node are dropped with it.
 
     Hallucinated labels (anything the LM returns that was not in the
-    candidate set) are ignored — :func:`filter_entities_by_relevance`
+    candidate set) are ignored; :func:`filter_entities_by_relevance`
     already filters them, but the post-filter ``relevant_set`` check
     here is the second line of defense. Empty / single-candidate KGs
     short-circuit through the no-op fast path inside
