@@ -257,7 +257,6 @@ def test_brief_anchor_tweets_present() -> None:
     """Anchor tweets render with a clickable canonical x.com URL."""
 
     options = _make_options(query="x", shape=ReportShape.BRIEF)
-    hits = [_make_hit(f"t{i}", handle="alice", snippet=f"tweet {i}") for i in range(3)]
     # Tweet IDs need to be all-digits to land on the per-handle status URL.
     hits = [_make_hit(str(1000 + i), handle="alice", snippet=f"tweet {i}") for i in range(3)]
     body = render_report(

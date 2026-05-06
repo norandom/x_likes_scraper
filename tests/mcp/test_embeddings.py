@@ -536,10 +536,9 @@ def test_cosine_top_k_default_k_is_200() -> None:
 
 def test_cosine_top_k_with_restrict_returns_only_restricted_ids() -> None:
     embedder = _make_embedder()
-    # 10 rows where id_5 has the strongest alignment with query (1,0).
-    raw = [[1.0, 0.0]] * 10
-    # Make id_5 stand out before normalization is irrelevant — they all
-    # normalize to (1,0). To break ties deterministically, vary x slightly.
+    # 10 rows; id_5 has the strongest alignment with query (1,0). All rows
+    # normalize to (1,0) before scoring, so vary x slightly to break ties
+    # deterministically.
     raw = [
         [1.0, 0.1],  # id_0
         [1.0, 0.2],  # id_1
