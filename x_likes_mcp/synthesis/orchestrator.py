@@ -28,6 +28,7 @@ component) and requirements 1.1, 1.3, 1.4, 5.2, 6.3, 9.4, 12.4.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from ..config import Config, ConfigError
@@ -466,6 +467,9 @@ def _synthesize_phase(
         ) from exc
 
 
+_TCO_RE = re.compile(r"https?://t\.co/\S+")
+
+
 def _hit_text(hit: ScoredHit, index: TweetIndex) -> str:
     """Return the best-effort text for ``hit``.
 
@@ -481,6 +485,32 @@ def _hit_text(hit: ScoredHit, index: TweetIndex) -> str:
     if tweet is None:
         return ""
     return str(getattr(tweet, "text", "") or "")
+
+
+def _hit_extraction_text(hit: ScoredHit, index: TweetIndex) -> str:
+    """Return the text used for entity extraction.
+
+    Strips raw ``t.co`` shortlinks (so the domain regex does not learn
+    "t.co" as an entity) and appends the resolved URLs the exporter
+    captured in ``Tweet.urls``. The result is what the dense / BM25
+    indexers also see (mirrors :func:`corpus_text.tweet_index_text`),
+    which keeps the KG entity surface aligned with what the search
+    pipeline already retrieves on.
+    """
+
+    text = _hit_text(hit, index)
+    cleaned = _TCO_RE.sub("", text).strip()
+
+    tweet = index.tweets_by_id.get(hit.tweet_id)
+    raw_urls: list[str] = []
+    if tweet is not None:
+        raw_urls = list(getattr(tweet, "urls", []) or [])
+
+    parts: list[str] = []
+    if cleaned:
+        parts.append(cleaned)
+    parts.extend(url for url in raw_urls if url)
+    return " ".join(parts)
 
 
 def _hit_handle(hit: ScoredHit, index: TweetIndex) -> str:
@@ -534,7 +564,7 @@ def _populate_kg_from_hits(
     """
 
     for hit in hits:
-        text = _hit_text(hit, index)
+        text = _hit_extraction_text(hit, index)
         handle = _hit_handle(hit, index)
 
         tnode_id = tweet_id(hit.tweet_id)
