@@ -574,8 +574,10 @@ def __getattr__(name: str) -> Any:
         value = _ReportOptions
 
     # Cache on the module dict so subsequent lookups skip ``__getattr__``
-    # and stay monkeypatch-compatible.
-    globals()[name] = value
+    # and stay monkeypatch-compatible. The ``globals()[...] = ...`` write
+    # is the canonical PEP-562 pattern; suppressing apiiro's generic-
+    # obfuscation rule because the lazy resolver is documented above.
+    globals()[name] = value  # nosemgrep: apiiro.obfuscation.python.python-obfuscation-generic
     return value
 
 

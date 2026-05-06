@@ -185,7 +185,9 @@ class TweetIndex:
         cache_path = config.cache_path
         if cache_path.exists() and cache_path.stat().st_mtime >= newest_md_mtime:
             with cache_path.open("rb") as fh:
-                tree_obj = pickle.load(fh)  # nosem: avoid-pickle
+                tree_obj = pickle.load(
+                    fh
+                )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
         else:
             tree_obj = tree_module.build_tree(config.by_month_dir)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +199,9 @@ class TweetIndex:
                 suffix=".tmp",
                 delete=False,
             ) as fh:
-                pickle.dump(tree_obj, fh)  # nosem: avoid-pickle
+                pickle.dump(
+                    tree_obj, fh
+                )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
                 tmp_name = fh.name
             os.replace(tmp_name, cache_path)
 

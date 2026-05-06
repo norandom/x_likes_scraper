@@ -63,7 +63,9 @@ class Checkpoint:
         # network exposure, no untrusted producer; deserialization risk is
         # bounded to whatever the user puts in their own output directory.
         with open(self.tweets_file, "wb") as f:
-            pickle.dump(tweets, f)  # nosem: avoid-pickle
+            pickle.dump(
+                tweets, f
+            )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
 
         print(f"✓ Checkpoint saved: {total_fetched} tweets")
 
@@ -86,7 +88,9 @@ class Checkpoint:
             # makes pickle here acceptable (single-user, local-only file).
             if self.tweets_file.exists():
                 with open(self.tweets_file, "rb") as f:
-                    tweets = pickle.load(f)  # nosem: avoid-pickle
+                    tweets = pickle.load(
+                        f
+                    )  # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
                 checkpoint_data["tweets"] = tweets
             else:
                 checkpoint_data["tweets"] = []
