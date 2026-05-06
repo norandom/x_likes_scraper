@@ -35,6 +35,7 @@ from x_likes_mcp.synthesis.kg import KG, Node, NodeKind
 from x_likes_mcp.synthesis.shapes import MAX_MINDMAP_DEPTH
 
 __all__ = [
+    "DEFAULT_MIN_LEVEL3_WEIGHT",
     "DEFAULT_TOP_PER_CATEGORY",
     "render_mindmap",
 ]
@@ -44,6 +45,14 @@ __all__ = [
 # rendered diagram legible in GitHub / Obsidian / VS Code preview but
 # large enough to expose the interesting tail beyond the top three.
 DEFAULT_TOP_PER_CATEGORY: int = 8
+
+
+# Default minimum cumulative weight required for a level-3 (top-K)
+# node to surface. Entities mentioned only once across the whole hit
+# set are likely tangential — they accumulate weight via ``add_node``
+# only when they recur, so the threshold filters one-off proper nouns
+# without removing genuinely topical ones. Set to ``0.0`` to disable.
+DEFAULT_MIN_LEVEL3_WEIGHT: float = 2.0
 
 
 # Order is fixed so the output is deterministic across runs and across
@@ -110,6 +119,7 @@ def render_mindmap(
     kg: KG,
     max_depth: int = MAX_MINDMAP_DEPTH,
     top_per_category: int = DEFAULT_TOP_PER_CATEGORY,
+    min_level3_weight: float = DEFAULT_MIN_LEVEL3_WEIGHT,
 ) -> str:
     r"""Render a depth-capped mermaid ``mindmap`` block for ``query`` + ``kg``.
 
@@ -152,6 +162,13 @@ def render_mindmap(
     # --- level 2: category headers --------------------------------------
     for category_label, kind in _CATEGORIES:
         top_nodes: list[Node] = kg.top_entities(kind, top_per_category)
+        # Apply the min-weight floor before deciding whether the category
+        # has any survivors. Below-threshold one-off mentions ("Yeah",
+        # "The") would otherwise leak through the regex extractor and
+        # eat a category slot — filter them out here so the visual still
+        # honors the empty-category-header skip.
+        if min_level3_weight > 0:
+            top_nodes = [n for n in top_nodes if n.weight >= min_level3_weight]
         if not top_nodes:
             # Skip categories with no nodes so empty headers don't clutter
             # the rendered diagram.

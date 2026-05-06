@@ -102,7 +102,7 @@ class TestLevel1Categories:
     def test_level1_category_emitted_only_when_non_empty(self) -> None:
         kg = KG()
         kg.add_node(Node(id=handle_id("alice"), kind=NodeKind.HANDLE, label="alice", weight=1.0))
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         text = "\n".join(inside)
         assert "Authors" in text
@@ -144,7 +144,7 @@ class TestLevel2:
         kg.add_node(Node(id=handle_id("low"), kind=NodeKind.HANDLE, label="low", weight=1.0))
         kg.add_node(Node(id=handle_id("mid"), kind=NodeKind.HANDLE, label="mid", weight=2.0))
         kg.add_node(Node(id=handle_id("hi"), kind=NodeKind.HANDLE, label="hi", weight=3.0))
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         order: list[str] = []
         for line in inside:
@@ -164,7 +164,7 @@ class TestLevel3:
         kg.add_node(Node(id=tweet_id("2"), kind=NodeKind.TWEET, label="tweet two", weight=1.0))
         kg.add_edge(Edge(src=handle_id("foo"), dst=tweet_id("1"), kind=EdgeKind.AUTHORED_BY))
         kg.add_edge(Edge(src=handle_id("foo"), dst=tweet_id("2"), kind=EdgeKind.AUTHORED_BY))
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         # Find the ``foo`` line (level 2 under Authors); collect its level-3 children.
         foo_idx = next(i for i, line in enumerate(inside) if line.lstrip(" ") == "foo")
@@ -197,7 +197,7 @@ class TestDepthCap:
         kg.add_node(Node(id=tweet_id("2"), kind=NodeKind.TWEET, label="t2", weight=1.0))
         kg.add_edge(Edge(src=handle_id("foo"), dst=tweet_id("1"), kind=EdgeKind.AUTHORED_BY))
         kg.add_edge(Edge(src=tweet_id("1"), dst=tweet_id("2"), kind=EdgeKind.MENTIONS))
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         # MAX_MINDMAP_DEPTH=4 means root + 3 child levels. After stripping
         # the ``mindmap`` directive line, every remaining line must indent
@@ -225,7 +225,7 @@ class TestUnsafeChars:
                 weight=1.0,
             ),
         )
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         # Find the level-2 label line. The category header "Authors" is at
         # level 1, so its child sits at indent 6 (root=2, Authors=4, child=6).
@@ -248,7 +248,7 @@ class TestUnsafeChars:
                 weight=1.0,
             ),
         )
-        out = render_mindmap("q", kg)
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
         inside = _inside_fence(out)
         text = "\n".join(inside)
         assert "unnamed" in text
@@ -267,6 +267,39 @@ class TestMermaidBlockShape:
         # All inside lines indented in 2-space steps.
         for line in lines[2:-1]:
             assert _indent_of(line) % 2 == 0, line
+
+
+class TestMinLevel3Weight:
+    def test_default_min_weight_drops_singletons(self) -> None:
+        """Default ``min_level3_weight=2.0`` filters out one-off entities."""
+
+        kg = KG()
+        kg.add_node(Node(id=handle_id("once"), kind=NodeKind.HANDLE, label="once", weight=1.0))
+        kg.add_node(
+            Node(id=handle_id("recurring"), kind=NodeKind.HANDLE, label="recurring", weight=3.0)
+        )
+        out = render_mindmap("q", kg)
+        text = "\n".join(_inside_fence(out))
+        assert "recurring" in text
+        assert "once" not in text
+
+    def test_min_weight_zero_keeps_everything(self) -> None:
+        kg = KG()
+        kg.add_node(Node(id=handle_id("once"), kind=NodeKind.HANDLE, label="once", weight=1.0))
+        out = render_mindmap("q", kg, min_level3_weight=0.0)
+        text = "\n".join(_inside_fence(out))
+        assert "once" in text
+
+    def test_min_weight_drops_entire_category_when_no_survivors(self) -> None:
+        """A category whose top entities are all below the threshold is
+        omitted entirely from the rendered mindmap (no empty header)."""
+
+        kg = KG()
+        kg.add_node(Node(id=handle_id("a"), kind=NodeKind.HANDLE, label="a", weight=1.0))
+        kg.add_node(Node(id=handle_id("b"), kind=NodeKind.HANDLE, label="b", weight=1.0))
+        out = render_mindmap("q", kg, min_level3_weight=2.0)
+        text = "\n".join(_inside_fence(out))
+        assert "Authors" not in text
 
 
 class TestTopPerCategoryArg:

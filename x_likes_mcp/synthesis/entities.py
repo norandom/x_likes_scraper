@@ -69,6 +69,185 @@ _MAX_CONCEPT_WORDS = 3
 _SHORT_TEXT_LEN = 50
 
 
+# Concept-extraction stopword set. A capitalized phrase whose tokens
+# are *all* in this set is dropped from the concept stream; phrases
+# where at least one token is outside the set survive ("Deutschland
+# Bahn" would still pass even though "Deutschland" alone would not).
+# This is the LM-free first line of defense against "Yeah", "The",
+# bare interjections, and a few common bare demonyms / week-day-style
+# proper nouns that recurrently appear at sentence boundaries in
+# tweets but carry no topical signal.
+#
+# Strict English-only by design. Multilingual corpora should layer the
+# DSPy ``FilterEntitiesByRelevance`` pass on top.
+_CONCEPT_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # Articles + auxiliaries
+        "a",
+        "an",
+        "the",
+        "and",
+        "but",
+        "or",
+        "if",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "must",
+        "can",
+        # Pronouns
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "me",
+        "my",
+        "you",
+        "your",
+        "we",
+        "us",
+        "our",
+        "they",
+        "them",
+        "their",
+        "he",
+        "she",
+        "him",
+        "her",
+        "his",
+        "hers",
+        "its",
+        # Wh-words + quantifiers
+        "what",
+        "which",
+        "who",
+        "whom",
+        "where",
+        "when",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "now",
+        # Interjections / filler
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "yep",
+        "nope",
+        "nah",
+        "huh",
+        "wow",
+        "lol",
+        "haha",
+        "uh",
+        "um",
+        "hey",
+        "oh",
+        "ah",
+        "well",
+        "hmm",
+        # Common verbs
+        "got",
+        "get",
+        "gets",
+        "go",
+        "goes",
+        "going",
+        "gone",
+        "make",
+        "makes",
+        "made",
+        "see",
+        "sees",
+        "saw",
+        "seen",
+        "say",
+        "says",
+        "said",
+        "tell",
+        "tells",
+        "told",
+        "think",
+        "thinks",
+        "thought",
+        "know",
+        "knows",
+        "knew",
+        "known",
+        "want",
+        "wants",
+        "wanted",
+        "use",
+        "uses",
+        "used",
+        # Vague qualifiers
+        "good",
+        "great",
+        "bad",
+        "best",
+        "better",
+        "worse",
+        "worst",
+        "really",
+        "actually",
+        "basically",
+        "literally",
+        "totally",
+        # Position
+        "first",
+        "second",
+        "third",
+        "last",
+        "next",
+        "previous",
+        # Quantity
+        "many",
+        "much",
+        "less",
+        "lots",
+    }
+)
+
+
 # ---------------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------------
@@ -155,11 +334,18 @@ def _extract_concepts(hit_text: str, combined: str) -> list[Entity]:
         # want, without forcing the regex to enumerate every offset.
         for window in range(1, _MAX_CONCEPT_WORDS + 1):
             for start in range(len(words) - window + 1):
-                phrase = " ".join(words[start : start + window])
+                phrase_words = [w.lower() for w in words[start : start + window]]
+                # Drop the candidate when *every* token is a stopword.
+                # Phrases with at least one informative token survive
+                # ("Deutschland Bahn" still passes; bare "Deutschland"
+                # would fall through if it were in the stopword set,
+                # bare "Yeah" / "The" / "Hmm" do not).
+                if all(token in _CONCEPT_STOPWORDS for token in phrase_words):
+                    continue
                 # Normalize to lower-snake-case so the value is a stable
                 # KG ID ("AI Pentesting" -> "ai_pentesting"). The KG
                 # namespace doc pins this shape.
-                key = "_".join(phrase.lower().split())
+                key = "_".join(phrase_words)
                 counts[key] += 1
 
     is_short = len(hit_text) < _SHORT_TEXT_LEN

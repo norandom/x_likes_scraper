@@ -208,12 +208,15 @@ def test_kg_mode_hops_2_calls_round_two(
     monkeypatch.setattr(cli, "run_round_one", lambda index, options: hits_one)
     monkeypatch.setattr(cli, "run_round_two", fake_round_two)
 
-    rc = cli.main(["--kg", "AI", "--hops", "2"])
+    rc = cli.main(["--kg", "AI", "--hops", "2", "--min-weight", "0"])
 
     assert rc == 0
     assert captured["hops"] == 2
     out = capsys.readouterr().out
-    # Round-2 entity should appear in the rendered mindmap.
+    # Round-2 entity should appear in the rendered mindmap. The
+    # ``--min-weight 0`` override is required because the round-2 hit
+    # mentions @new_handle exactly once, giving it weight 1.0 — below
+    # the default min_level3_weight=2.0 threshold.
     assert "new_handle" in out
 
 

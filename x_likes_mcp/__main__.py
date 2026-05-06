@@ -68,7 +68,7 @@ from .sanitize import safe_http_url, sanitize_text
 from .synthesis import compiled, orchestrator
 from .synthesis.compiled import LabeledExample
 from .synthesis.kg import serialize_kg
-from .synthesis.mindmap import render_mindmap
+from .synthesis.mindmap import DEFAULT_MIN_LEVEL3_WEIGHT, render_mindmap
 from .synthesis.multihop import (
     HopsOutOfRange,
     run_round_one,
@@ -179,6 +179,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         choices=[1, 2],
         help="Number of search hops the synthesis-report orchestrator runs (default: 1).",
+    )
+    parser.add_argument(
+        "--min-weight",
+        type=float,
+        default=None,
+        dest="min_weight",
+        help=(
+            "For --kg: drop level-3 nodes (top-K entities) whose cumulative "
+            "weight is below this threshold. Defaults to "
+            "synthesis.mindmap.DEFAULT_MIN_LEVEL3_WEIGHT (2.0). Set to 0 to "
+            "disable the filter."
+        ),
     )
     parser.add_argument("--year", type=int, default=None)
     parser.add_argument("--month-start", default=None, dest="month_start")
@@ -522,7 +534,8 @@ def _run_kg(index: TweetIndex, args: argparse.Namespace) -> int:
     if args.json_out:
         body = json.dumps(serialize_kg(kg), ensure_ascii=False, indent=2) + "\n"
     else:
-        body = render_mindmap(query, kg) + "\n"
+        min_weight = args.min_weight if args.min_weight is not None else DEFAULT_MIN_LEVEL3_WEIGHT
+        body = render_mindmap(query, kg, min_level3_weight=min_weight) + "\n"
 
     if args.out:
         out_path = Path(args.out)
