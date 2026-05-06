@@ -20,6 +20,7 @@ from x_likes_mcp.config import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_OPENROUTER_BASE_URL,
     DEFAULT_SYNTHESIS_MAX_HOPS,
+    DEFAULT_SYNTHESIS_MODEL,
     DEFAULT_SYNTHESIS_PER_SOURCE_BYTES,
     DEFAULT_SYNTHESIS_ROUND_TWO_K,
     DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES,
@@ -656,3 +657,85 @@ def test_load_config_default_synthesis_constants_match_field_defaults() -> None:
     assert DEFAULT_SYNTHESIS_PER_SOURCE_BYTES == 4096
     assert DEFAULT_SYNTHESIS_TOTAL_CONTEXT_BYTES == 32768
     assert DEFAULT_SYNTHESIS_ROUND_TWO_K == 5
+    assert DEFAULT_SYNTHESIS_MODEL == "openai/gpt-4o-mini"
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter-as-LM fallback
+# ---------------------------------------------------------------------------
+
+
+def test_openrouter_key_alone_seeds_lm_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``OPENROUTER_API_KEY`` set + no ``OPENAI_*`` -> the loader points
+    the LM seam at OpenRouter and uses the OpenRouter key + the
+    documented default synthesis model.
+
+    Single-key cloud setup: one API key, embeddings + LM both go to
+    OpenRouter without the user duplicating config.
+    """
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config = load_config(env={"OPENROUTER_API_KEY": "sk-or-v1-fake"})
+
+    assert config.openai_base_url == DEFAULT_OPENROUTER_BASE_URL
+    assert config.openai_api_key == "sk-or-v1-fake"
+    assert config.openai_model == DEFAULT_SYNTHESIS_MODEL
+    # Embedding side stays unchanged.
+    assert config.openrouter_api_key == "sk-or-v1-fake"
+
+
+def test_explicit_openai_overrides_openrouter_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``OPENAI_BASE_URL`` / ``OPENAI_MODEL`` always wins
+    over the OpenRouter-as-LM fallback so users running a separate
+    local proxy keep getting that endpoint."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config = load_config(
+        env={
+            "OPENROUTER_API_KEY": "sk-or-v1-fake",
+            "OPENAI_BASE_URL": "http://localhost:8080/v1",
+            "OPENAI_MODEL": "local/llama-3.1-8b",
+            "OPENAI_API_KEY": "EMPTY",
+        }
+    )
+
+    assert config.openai_base_url == "http://localhost:8080/v1"
+    assert config.openai_model == "local/llama-3.1-8b"
+    assert config.openai_api_key == "EMPTY"
+
+
+def test_no_openrouter_no_openai_keeps_lm_endpoint_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither key set -> openai_base_url stays ``None`` (existing
+    contract preserved for offline tests + opt-in walker semantics)."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config = load_config(env={})
+
+    assert config.openai_base_url is None
+    assert config.openai_model is None
+    assert config.openai_api_key == ""
+
+
+def test_partial_openai_overrides_only_unset_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator who pins ``OPENAI_MODEL`` but leaves base_url unset
+    gets OpenRouter for the URL + their pinned model."""
+
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config = load_config(
+        env={
+            "OPENROUTER_API_KEY": "sk-or-v1-fake",
+            "OPENAI_MODEL": "anthropic/claude-3.5-haiku",
+        }
+    )
+
+    assert config.openai_base_url == DEFAULT_OPENROUTER_BASE_URL
+    assert config.openai_model == "anthropic/claude-3.5-haiku"
+    assert config.openai_api_key == "sk-or-v1-fake"

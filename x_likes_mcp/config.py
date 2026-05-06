@@ -47,6 +47,13 @@ from pathlib import Path
 DEFAULT_OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 DEFAULT_EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
 
+# Synthesis / walker LM fallback model used when the operator set an
+# OPENROUTER_API_KEY but did not pin OPENAI_MODEL explicitly. Cheap,
+# capable on structured outputs, and universally available on
+# OpenRouter — a sane single-key starting point. Override by setting
+# ``OPENAI_MODEL`` in ``.env`` or the shell.
+DEFAULT_SYNTHESIS_MODEL: str = "openai/gpt-4o-mini"
+
 # Synthesis-report defaults. Same single-source-of-truth pattern: the
 # ``fetcher``, ``cache``, and ``orchestrator`` modules import these
 # constants so a default change propagates without grepping for magic
@@ -242,6 +249,23 @@ def load_config(
     embedding_model = resolved.get("EMBEDDING_MODEL", "") or DEFAULT_EMBEDDING_MODEL
     openrouter_api_key_raw = resolved.get("OPENROUTER_API_KEY", "") or ""
     openrouter_api_key: str | None = openrouter_api_key_raw or None
+
+    # OpenRouter-as-LM fallback. When the operator only set
+    # OPENROUTER_API_KEY (the typical single-key cloud setup) and did
+    # not pin the walker / synthesizer LM endpoint, point the LM seam
+    # at OpenRouter. OpenRouter is OpenAI-shape so the existing
+    # OPENAI_BASE_URL contract carries over; the same key drives both
+    # embeddings and the LM call. An explicit ``OPENAI_BASE_URL`` /
+    # ``OPENAI_MODEL`` / ``OPENAI_API_KEY`` always wins so a user who
+    # runs a separate local proxy (vLLM, llama-cpp-server, Ollama,
+    # LiteLLM) keeps getting that endpoint.
+    if openrouter_api_key_raw:
+        if openai_base_url is None:
+            openai_base_url = openrouter_base_url
+        if openai_api_key == "":
+            openai_api_key = openrouter_api_key_raw
+        if openai_model is None:
+            openai_model = DEFAULT_SYNTHESIS_MODEL
 
     output_dir_raw = resolved.get("OUTPUT_DIR", "") or "output"
     output_dir = Path(output_dir_raw)
