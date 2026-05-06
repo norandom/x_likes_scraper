@@ -48,7 +48,7 @@ _ANSI_RE = re.compile(
     (?:
         \[ [0-?]* [ -/]* [@-~]    # CSI: ESC [ ... <terminator>
       | \] [^\x07\x1b]* (?:\x07|\x1b\\)  # OSC: ESC ] ... BEL or ESC \
-      | [@-Z\\-_]                # short ESC sequences (ESC + final byte)
+      | [@-_]                    # short ESC sequences (ESC + final byte 0x40-0x5F)
     )
     """,
     re.VERBOSE,
