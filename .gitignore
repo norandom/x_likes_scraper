@@ -3,6 +3,7 @@ venv/
 env/
 ENV/
 .venv/
+.venv-dagger/
 
 # Python
 __pycache__/

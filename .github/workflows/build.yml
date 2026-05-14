@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dagger-build:
+    name: dagger (lint + mypy + pytest + uv build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Create Dagger driver venv
+        run: |
+          uv venv --python 3.12 .venv-dagger
+          uv pip install --python .venv-dagger/bin/python dagger-io anyio
+
+      - name: Run Dagger build pipeline
+        uses: dagger/dagger-for-github@v7
+        with:
+          verb: run
+          args: .venv-dagger/bin/python ci/build.py
+          version: latest
+
+      - name: Upload distribution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
