@@ -481,9 +481,9 @@ def test_e2e_hops_1_issues_one_index_search(
     )
     run_report(index, options, config=fake_export)
 
-    assert (
-        len(probe.queries) == 1
-    ), f"hops=1 must trigger exactly one search call; got {probe.queries}"
+    assert len(probe.queries) == 1, (
+        f"hops=1 must trigger exactly one search call; got {probe.queries}"
+    )
     assert probe.queries[0] == "agents"
 
 
@@ -517,9 +517,9 @@ def test_e2e_hops_2_issues_round_two_searches_in_parallel(
     # count depends on the entity set the round-1 KG produced for the
     # fixture corpus. We assert a non-trivial fan-out and the parallel
     # window invariant.
-    assert (
-        len(probe.queries) >= 2
-    ), f"hops=2 must issue at least one round-2 search; got {probe.queries}"
+    assert len(probe.queries) >= 2, (
+        f"hops=2 must issue at least one round-2 search; got {probe.queries}"
+    )
     # Round-1 is always the user query and always first.
     assert probe.queries[0] == "agents"
 

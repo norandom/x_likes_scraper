@@ -157,9 +157,9 @@ def test_each_marker_family_neutralized_in_bodies() -> None:
         # constant number of times; specifically, never as part of the
         # body payload. Asserting "[FENCE]" is in the blob proves
         # neutralization actually fired.
-        assert (
-            occurrences <= 4
-        ), f"marker {marker!r} appears {occurrences} times - payload was not neutralized"
+        assert occurrences <= 4, (
+            f"marker {marker!r} appears {occurrences} times - payload was not neutralized"
+        )
 
     assert "[FENCE]" in blob
 

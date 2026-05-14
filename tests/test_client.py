@@ -359,12 +359,12 @@ def test_fetch_all_likes_rate_limit_branch(client: XAPIClient, monkeypatch) -> N
     sleep_args = [call.args[0] for call in sleep_mock.call_args_list]
     assert 10 in sleep_args, f"Expected sleep(10) for rate-limit wait, got {sleep_args}"
 
-    assert (
-        checkpoint_callback.called
-    ), "checkpoint_callback should be invoked before the rate-limit sleep"
+    assert checkpoint_callback.called, (
+        "checkpoint_callback should be invoked before the rate-limit sleep"
+    )
     # The checkpoint call before the sleep should carry the cursor that
     # triggered the wait (i.e. CURSOR_PAGE_1, the Bottom cursor of page 1).
     cursors_passed = [call.args[1] for call in checkpoint_callback.call_args_list]
-    assert (
-        "CURSOR_PAGE_1" in cursors_passed
-    ), f"Expected checkpoint with CURSOR_PAGE_1, got {cursors_passed}"
+    assert "CURSOR_PAGE_1" in cursors_passed, (
+        f"Expected checkpoint with CURSOR_PAGE_1, got {cursors_passed}"
+    )

@@ -163,9 +163,9 @@ def test_resume_different_user_clears_checkpoint(
 
     # 4. Assertions: fresh fetch, no merge with A's data, checkpoint cleared.
     assert captured["user_id"] == "B"
-    assert (
-        captured["start_cursor"] is None
-    ), "Mismatched checkpoint user must not contribute its cursor"
+    assert captured["start_cursor"] is None, (
+        "Mismatched checkpoint user must not contribute its cursor"
+    )
 
     result_ids = [t.id for t in result]
     assert result_ids == ["b1", "b2"]

@@ -149,9 +149,9 @@ def test_open_or_build_writes_cache_on_first_call(
     # Second call, no fixture changes → cache hit, no rebuild.
     TweetIndex.open_or_build(fake_export, _default_weights())
 
-    assert (
-        call_counter["n"] == 1
-    ), "second open_or_build with a fresh cache should not rebuild the tree"
+    assert call_counter["n"] == 1, (
+        "second open_or_build with a fresh cache should not rebuild the tree"
+    )
 
 
 def test_open_or_build_rebuilds_when_md_newer_than_cache(
@@ -184,9 +184,9 @@ def test_open_or_build_rebuilds_when_md_newer_than_cache(
 
     # Second open_or_build sees a stale cache and rebuilds.
     TweetIndex.open_or_build(fake_export, _default_weights())
-    assert (
-        call_counter["n"] == 2
-    ), "open_or_build should rebuild when an .md file is newer than the cache"
+    assert call_counter["n"] == 2, (
+        "open_or_build should rebuild when an .md file is newer than the cache"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -854,9 +854,9 @@ def test_open_or_build_reuses_embedding_cache_on_second_call(
     # Second build with the same config (same output_dir) reuses the cache.
     TweetIndex.open_or_build(fake_export, _default_weights())
 
-    assert (
-        counter["calls"] == first_call_count
-    ), "second open_or_build with a valid embedding cache should not re-invoke the embeddings API"
+    assert counter["calls"] == first_call_count, (
+        "second open_or_build with a valid embedding cache should not re-invoke the embeddings API"
+    )
 
 
 def test_open_or_build_writes_cache_files(
