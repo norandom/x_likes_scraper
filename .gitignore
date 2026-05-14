@@ -47,6 +47,12 @@ media/
 !.kiro/**
 !.claude/
 !.claude/**
+
+# Tracked: test fixtures (would otherwise match the *.json / *.md output globs)
+!tests/**/*.json
+!tests/**/*.md
+!tests/**/*.csv
+!tests/**/*.html
 static_analysis_codeql_*/
 static_analysis_semgrep_*/
 

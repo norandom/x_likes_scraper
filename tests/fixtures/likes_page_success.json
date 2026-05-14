@@ -1,0 +1,235 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "__typename": "User",
+        "timeline": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "tweet-1000000000000000001",
+                    "sortIndex": "1000000000000000001",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "__typename": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "__typename": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1000000000000000001",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "__typename": "User",
+                                  "id": "VXNlcjoxMjM0NTY3ODkw",
+                                  "rest_id": "1234567890",
+                                  "legacy": {
+                                    "screen_name": "test_user",
+                                    "name": "Test User",
+                                    "profile_image_url_https": "https://pbs.twimg.com/profile_images/REDACTED/avatar_normal.jpg",
+                                    "verified": false,
+                                    "followers_count": 100,
+                                    "friends_count": 50
+                                  }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "id_str": "1000000000000000001",
+                              "full_text": "This is a plain test tweet for the success fixture.",
+                              "created_at": "Sun Nov 09 11:05:17 +0000 2025",
+                              "lang": "en",
+                              "retweet_count": 3,
+                              "favorite_count": 12,
+                              "reply_count": 1,
+                              "quote_count": 0,
+                              "conversation_id_str": "1000000000000000001",
+                              "entities": {
+                                "urls": [],
+                                "hashtags": [],
+                                "user_mentions": []
+                              }
+                            },
+                            "views": {
+                              "count": "456"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "tweet-1000000000000000002",
+                    "sortIndex": "1000000000000000002",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "__typename": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "__typename": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1000000000000000002",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "__typename": "User",
+                                  "id": "VXNlcjoxMjM0NTY3ODkx",
+                                  "rest_id": "1234567891",
+                                  "legacy": {
+                                    "screen_name": "test_user_two",
+                                    "name": "Test User Two",
+                                    "profile_image_url_https": "https://pbs.twimg.com/profile_images/REDACTED/avatar2_normal.jpg",
+                                    "verified": true,
+                                    "followers_count": 2500,
+                                    "friends_count": 300
+                                  }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "id_str": "1000000000000000002",
+                              "full_text": "Tweet with an attached photo and a hashtag #example https://t.co/REDACTED",
+                              "created_at": "Mon Nov 10 14:22:09 +0000 2025",
+                              "lang": "en",
+                              "retweet_count": 7,
+                              "favorite_count": 42,
+                              "reply_count": 4,
+                              "quote_count": 1,
+                              "conversation_id_str": "1000000000000000002",
+                              "entities": {
+                                "urls": [
+                                  {
+                                    "url": "https://t.co/REDACTED",
+                                    "expanded_url": "https://example.com/article",
+                                    "display_url": "example.com/article"
+                                  }
+                                ],
+                                "hashtags": [
+                                  {"text": "example"}
+                                ],
+                                "user_mentions": []
+                              },
+                              "extended_entities": {
+                                "media": [
+                                  {
+                                    "type": "photo",
+                                    "url": "https://t.co/REDACTED",
+                                    "media_url_https": "https://pbs.twimg.com/media/REDACTED.jpg",
+                                    "original_info": {
+                                      "width": 1200,
+                                      "height": 800
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "views": {
+                              "count": "9876"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "tweet-1000000000000000003",
+                    "sortIndex": "1000000000000000003",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "__typename": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "__typename": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1000000000000000003",
+                            "quoted_status_result": {
+                              "result": {
+                                "__typename": "Tweet",
+                                "rest_id": "999000000000000099",
+                                "legacy": {
+                                  "id_str": "999000000000000099",
+                                  "full_text": "Quoted source tweet body.",
+                                  "created_at": "Sat Nov 08 09:00:00 +0000 2025",
+                                  "lang": "en"
+                                }
+                              }
+                            },
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "__typename": "User",
+                                  "id": "VXNlcjoxMjM0NTY3ODky",
+                                  "rest_id": "1234567892",
+                                  "legacy": {
+                                    "screen_name": "test_user_three",
+                                    "name": "Test User Three",
+                                    "profile_image_url_https": "https://pbs.twimg.com/profile_images/REDACTED/avatar3_normal.jpg",
+                                    "verified": false,
+                                    "followers_count": 800,
+                                    "friends_count": 200
+                                  }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "id_str": "1000000000000000003",
+                              "full_text": "Quote-tweeting an interesting take. @test_user",
+                              "created_at": "Tue Nov 11 18:45:30 +0000 2025",
+                              "lang": "en",
+                              "retweet_count": 0,
+                              "favorite_count": 5,
+                              "reply_count": 0,
+                              "quote_count": 0,
+                              "conversation_id_str": "1000000000000000003",
+                              "entities": {
+                                "urls": [],
+                                "hashtags": [],
+                                "user_mentions": [
+                                  {"screen_name": "test_user", "id_str": "1234567890"}
+                                ]
+                              }
+                            },
+                            "views": {
+                              "count": "120"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "cursor-top-1000000000000000000",
+                    "content": {
+                      "entryType": "TimelineTimelineCursor",
+                      "__typename": "TimelineTimelineCursor",
+                      "value": "DAABCgABREDACTEDTOPCURSOR",
+                      "cursorType": "Top"
+                    }
+                  },
+                  {
+                    "entryId": "cursor-bottom-2000000000000000000",
+                    "content": {
+                      "entryType": "TimelineTimelineCursor",
+                      "__typename": "TimelineTimelineCursor",
+                      "value": "DAABCgABREDACTEDBOTTOMCURSOR",
+                      "cursorType": "Bottom"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

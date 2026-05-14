@@ -1,0 +1,29 @@
+[
+  {
+    "name": "auth_token",
+    "value": "REDACTED",
+    "domain": ".x.com",
+    "path": "/",
+    "secure": true,
+    "httpOnly": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ct0",
+    "value": "REDACTED",
+    "domain": ".x.com",
+    "path": "/",
+    "secure": true,
+    "httpOnly": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "guest_id",
+    "value": "v1%3AREDACTED",
+    "domain": ".x.com",
+    "path": "/",
+    "secure": true,
+    "httpOnly": false,
+    "sameSite": "None"
+  }
+]
