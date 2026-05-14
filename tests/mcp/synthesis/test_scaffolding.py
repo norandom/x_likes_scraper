@@ -61,5 +61,5 @@ def test_real_lm_marker_skipped_by_default() -> None:
     """
 
     raise AssertionError(
-        "real_lm-marked test ran without --run-real-lm; the marker hook " "is broken."
+        "real_lm-marked test ran without --run-real-lm; the marker hook is broken."
     )

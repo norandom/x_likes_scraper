@@ -558,12 +558,12 @@ def test_e2e_fetch_urls_false_never_instantiates_fetcher(
 
     def _fail_fetch(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError(
-            "synthesis.fetcher.fetch_all must not be invoked when " "fetch_urls=False",
+            "synthesis.fetcher.fetch_all must not be invoked when fetch_urls=False",
         )
 
     def _fail_probe(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError(
-            "synthesis.fetcher.probe_container must not be invoked when " "fetch_urls=False",
+            "synthesis.fetcher.probe_container must not be invoked when fetch_urls=False",
         )
 
     monkeypatch.setattr(orchestrator, "fetch_all", _fail_fetch)

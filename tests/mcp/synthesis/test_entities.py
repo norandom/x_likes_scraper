@@ -134,7 +134,7 @@ def test_concept_stopword_only_phrase_dropped() -> None:
     """Bare interjections / articles never surface as concepts even when
     they recur enough to clear the count threshold."""
 
-    text = "Yeah, well, yeah! " "Yeah, of course. The quick brown fox. " "Yeah okay yeah."
+    text = "Yeah, well, yeah! Yeah, of course. The quick brown fox. Yeah okay yeah."
     entities = extract_regex(text, [])
     concept_values = {e.value for e in entities if e.kind is EntityKind.CONCEPT}
     assert "yeah" not in concept_values
@@ -150,9 +150,7 @@ def test_concept_partial_stopword_phrase_survives() -> None:
     where the stopword sits between informative tokens is kept.
     """
 
-    text = (
-        "Quantum The Algorithm. Quantum The Algorithm. " "Some other text. Quantum The Algorithm."
-    )
+    text = "Quantum The Algorithm. Quantum The Algorithm. Some other text. Quantum The Algorithm."
     entities = extract_regex(text, [])
     concept_values = {e.value for e in entities if e.kind is EntityKind.CONCEPT}
     # Phrase containing "the" between two informative tokens survives.

@@ -185,8 +185,7 @@ def probe_container(
             client.get(f"{base_url.rstrip('/')}/", timeout=timeout)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
             raise ContainerUnreachable(
-                f"crawl4ai container unreachable at {base_url}; "
-                "set CRAWL4AI_BASE_URL to override"
+                f"crawl4ai container unreachable at {base_url}; set CRAWL4AI_BASE_URL to override"
             ) from exc
         except httpx.HTTPError as exc:
             # Other transport-level httpx errors (e.g. ProxyError) are
@@ -194,8 +193,7 @@ def probe_container(
             # point of view. Catching the broad ``HTTPError`` keeps the
             # probe robust against future httpx exception subclasses.
             raise ContainerUnreachable(
-                f"crawl4ai container unreachable at {base_url}; "
-                "set CRAWL4AI_BASE_URL to override"
+                f"crawl4ai container unreachable at {base_url}; set CRAWL4AI_BASE_URL to override"
             ) from exc
     finally:
         if owns_client and isinstance(client, httpx.Client):

@@ -491,8 +491,7 @@ def _run_report_optimize(index: TweetIndex, args: argparse.Namespace) -> int:
         return 2
 
     print(
-        f"x_likes_mcp: optimizer wrote compiled program to "
-        f"{compiled_root / f'{shape.value}.json'}",
+        f"x_likes_mcp: optimizer wrote compiled program to {compiled_root / f'{shape.value}.json'}",
         file=sys.stderr,
     )
     return 0

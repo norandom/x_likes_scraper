@@ -415,8 +415,7 @@ def test_synthesize_likes_empty_corpus_returns_success_envelope(
     """
 
     empty_markdown = (
-        '# Likes report — query "obscure topic"\n\n'
-        "No matching tweets were found for this query.\n"
+        '# Likes report — query "obscure topic"\n\nNo matching tweets were found for this query.\n'
     )
 
     def _empty_report(_index: Any, options: ReportOptions, *, config: Any) -> ReportResult:

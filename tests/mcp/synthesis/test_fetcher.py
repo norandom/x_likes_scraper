@@ -432,7 +432,7 @@ def test_fetch_url_drops_office_content_type(tmp_path: Path) -> None:
                 url=url,
                 markdown="ignored",
                 content_type=(
-                    "application/vnd.openxmlformats-officedocument." "wordprocessingml.document"
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 ),
             ),
         )

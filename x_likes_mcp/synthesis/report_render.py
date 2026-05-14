@@ -319,7 +319,7 @@ def render_empty_report(options: ReportOptions) -> str:
     lines = [
         f"# Synthesis report — {query}",
         "",
-        (f"No matching tweets were found in the corpus for the query " f"{query!r}{suffix}."),
+        (f"No matching tweets were found in the corpus for the query {query!r}{suffix}."),
     ]
     body = "\n".join(lines).rstrip() + "\n"
     return sanitize_text(body)
