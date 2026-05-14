@@ -1,5 +1,14 @@
 # X Likes Exporter (Python)
 
+[![CI](https://github.com/norandom/x_likes_scraper/actions/workflows/build.yml/badge.svg)](https://github.com/norandom/x_likes_scraper/actions/workflows/build.yml)
+[![Release](https://github.com/norandom/x_likes_scraper/actions/workflows/release.yml/badge.svg)](https://github.com/norandom/x_likes_scraper/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/norandom/x_likes_scraper)](https://github.com/norandom/x_likes_scraper/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/norandom/x_likes_scraper)
+
 Three layers built on the same local archive:
 
 1. **Scraper** — pulls liked tweets off X, writes JSON / CSV / Excel / Markdown / HTML, downloads media. Resumes from a checkpoint after a network blip or rate-limit wait.
