@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v10.0.0
         with:
           enable-cache: true
 
@@ -32,7 +32,7 @@ jobs:
           uv pip install --python .venv-dagger/bin/python dagger-io anyio
 
       - name: Run Dagger build pipeline
-        uses: dagger/dagger-for-github@v8.4.0
+        uses: dagger/dagger-for-github@v8.4.1
         with:
           verb: run
           args: .venv-dagger/bin/python ci/build.py
@@ -40,7 +40,7 @@ jobs:
 
       - name: Upload distribution artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: dist
           path: dist/
