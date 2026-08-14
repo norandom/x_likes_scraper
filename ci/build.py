@@ -66,6 +66,37 @@ async def main() -> None:
         # mypy scope is pinned in pyproject.toml ([tool.mypy].files = x_likes_mcp).
         await base.with_exec(["uv", "run", "mypy"]).sync()
 
+        # Audit the shipped dependency set. DiskCache's advisory requires an
+        # attacker to already have write access to DSPy's local cache directory
+        # and has no fixed release; keep the exception narrow and explicit.
+        audit_requirements = "/tmp/x-likes-exporter-requirements.txt"
+        await base.with_exec(
+            [
+                "uv",
+                "export",
+                "--frozen",
+                "--no-dev",
+                "--no-emit-project",
+                "--format",
+                "requirements-txt",
+                "--output-file",
+                audit_requirements,
+            ]
+        ).sync()
+        await base.with_exec(
+            [
+                "uv",
+                "run",
+                "pip-audit",
+                "--progress-spinner",
+                "off",
+                "--ignore-vuln",
+                "PYSEC-2026-2447",
+                "-r",
+                audit_requirements,
+            ]
+        ).sync()
+
         await base.with_exec(["uv", "run", "pytest", "-q"]).sync()
 
         built = base.with_exec(["uv", "build", "--sdist", "--wheel"])

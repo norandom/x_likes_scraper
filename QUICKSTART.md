@@ -83,7 +83,7 @@ exporter = XLikesExporter("cookies.json")
 exporter.fetch_likes("YOUR_USER_ID", download_media=False)
 
 df = exporter.get_dataframe()
-print(df.nlargest(10, 'favorite_count')[['user_screen_name', 'text', 'favorite_count']])
+print(df.nlargest(10, "favorite_count")[["user_screen_name", "text", "favorite_count"]])
 
 # Save analysis
 df.to_csv("analysis.csv", index=False)

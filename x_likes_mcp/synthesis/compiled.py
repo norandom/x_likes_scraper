@@ -175,7 +175,8 @@ def save_compiled(module: dspy.Module, shape: ReportShape, root: Path) -> Path:
     try:
         try:
             module.save(tmp_name)
-            with open(tmp_name, "rb") as handle:
+            # Windows requires a writable file descriptor for ``fsync``.
+            with open(tmp_name, "r+b") as handle:
                 os.fsync(handle.fileno())
         except BaseException:
             with contextlib.suppress(OSError):

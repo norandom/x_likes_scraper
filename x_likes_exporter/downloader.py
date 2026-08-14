@@ -196,11 +196,12 @@ class MediaDownloader:
         Returns:
             Relative path
         """
-        filepath = Path(filepath)
-        base_dir = Path(base_dir)
+        original_filepath = filepath
+        filepath_path = Path(filepath)
+        base_dir_path = Path(base_dir)
 
         try:
-            return str(filepath.relative_to(base_dir))
+            return str(filepath_path.relative_to(base_dir_path))
         except ValueError:
             # If files are not in the same tree, return the filepath as-is
-            return str(filepath)
+            return original_filepath

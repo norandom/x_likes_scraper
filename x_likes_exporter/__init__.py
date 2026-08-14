@@ -6,5 +6,5 @@ from .exporter import XLikesExporter
 from .loader import iter_monthly_markdown, load_export
 from .models import Tweet, User
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = ["Tweet", "User", "XLikesExporter", "iter_monthly_markdown", "load_export"]

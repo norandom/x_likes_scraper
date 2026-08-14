@@ -451,7 +451,8 @@ def list_months(index: TweetIndex) -> list[dict[str, Any]]:
     return [
         {
             "year_month": info.year_month,
-            "path": str(info.path),
+            # MCP payloads use stable forward-slash paths on every host OS.
+            "path": info.path.as_posix(),
             "tweet_count": info.tweet_count,
         }
         for info in index.list_months()

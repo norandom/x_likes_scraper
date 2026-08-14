@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
 
@@ -29,7 +29,7 @@ jobs:
           uv pip install --python .venv-dagger/bin/python dagger-io anyio
 
       - name: Run Dagger build pipeline
-        uses: dagger/dagger-for-github@v7
+        uses: dagger/dagger-for-github@v8.4.0
         with:
           verb: run
           args: .venv-dagger/bin/python ci/build.py
@@ -45,7 +45,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
