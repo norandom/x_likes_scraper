@@ -70,10 +70,11 @@ async def main() -> None:
         # attacker to already have write access to DSPy's local cache directory
         # and has no fixed release; keep the exception narrow and explicit.
         audit_requirements = "/tmp/x-likes-exporter-requirements.txt"
-        await base.with_exec(
+        audit_base = base.with_exec(
             [
                 "uv",
                 "export",
+                "--quiet",
                 "--frozen",
                 "--no-dev",
                 "--no-emit-project",
@@ -82,8 +83,8 @@ async def main() -> None:
                 "--output-file",
                 audit_requirements,
             ]
-        ).sync()
-        await base.with_exec(
+        )
+        await audit_base.with_exec(
             [
                 "uv",
                 "run",
