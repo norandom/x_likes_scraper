@@ -156,17 +156,19 @@ def _search_likes_tool(year_max: int) -> mcp_types.Tool:
         "required": ["results"],
         "additionalProperties": False,
     }
-    return mcp_types.Tool(
-        name="search_likes",
-        description=(
-            "Search the user's liked tweets by natural-language query. "
-            "Default path runs hybrid recall (BM25 + dense) + ranker with "
-            "zero chat-completions calls. Optional year/month_start/"
-            "month_end pre-filter narrows the corpus. Pass with_why=true "
-            "to run the walker LLM over the top hits and populate `why`."
-        ),
-        inputSchema=input_schema,
-        outputSchema=output_schema,
+    return mcp_types.Tool.model_validate(
+        {
+            "name": "search_likes",
+            "description": (
+                "Search the user's liked tweets by natural-language query. "
+                "Default path runs hybrid recall (BM25 + dense) + ranker with "
+                "zero chat-completions calls. Optional year/month_start/"
+                "month_end pre-filter narrows the corpus. Pass with_why=true "
+                "to run the walker LLM over the top hits and populate `why`."
+            ),
+            "inputSchema": input_schema,
+            "outputSchema": output_schema,
+        }
     )
 
 
@@ -178,14 +180,16 @@ def _list_months_tool() -> mcp_types.Tool:
         "required": ["months"],
         "additionalProperties": False,
     }
-    return mcp_types.Tool(
-        name="list_months",
-        description=(
-            "List the months for which per-month Markdown exists, "
-            "reverse-chronologically, with tweet counts when available."
-        ),
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
-        outputSchema=output_schema,
+    return mcp_types.Tool.model_validate(
+        {
+            "name": "list_months",
+            "description": (
+                "List the months for which per-month Markdown exists, "
+                "reverse-chronologically, with tweet counts when available."
+            ),
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "outputSchema": output_schema,
+        }
     )
 
 
@@ -209,11 +213,13 @@ def _get_month_tool() -> mcp_types.Tool:
         "required": ["markdown"],
         "additionalProperties": False,
     }
-    return mcp_types.Tool(
-        name="get_month",
-        description="Return the raw per-month Markdown for one YYYY-MM.",
-        inputSchema=input_schema,
-        outputSchema=output_schema,
+    return mcp_types.Tool.model_validate(
+        {
+            "name": "get_month",
+            "description": "Return the raw per-month Markdown for one YYYY-MM.",
+            "inputSchema": input_schema,
+            "outputSchema": output_schema,
+        }
     )
 
 
@@ -231,11 +237,13 @@ def _read_tweet_tool() -> mcp_types.Tool:
         "required": ["tweet_id"],
         "additionalProperties": False,
     }
-    return mcp_types.Tool(
-        name="read_tweet",
-        description="Return metadata for one tweet by numeric id.",
-        inputSchema=input_schema,
-        outputSchema=_TWEET_METADATA_SCHEMA,
+    return mcp_types.Tool.model_validate(
+        {
+            "name": "read_tweet",
+            "description": "Return metadata for one tweet by numeric id.",
+            "inputSchema": input_schema,
+            "outputSchema": _TWEET_METADATA_SCHEMA,
+        }
     )
 
 
@@ -323,18 +331,20 @@ def _synthesize_likes_tool(year_max: int) -> mcp_types.Tool:
         "required": ["markdown", "shape", "used_hops", "fetched_url_count"],
         "additionalProperties": False,
     }
-    return mcp_types.Tool(
-        name="synthesize_likes",
-        description=(
-            "Synthesize a markdown report from the user's liked tweets. "
-            "Drives the synthesis-report orchestrator: round-1 search, "
-            "optional round-2 entity fan-out (hops=2), optional URL "
-            "fetch (fetch_urls=true), KG build, fenced-context "
-            "assembly, DSPy synthesis, markdown render. The default "
-            "path performs zero outbound HTTP beyond the LM endpoint."
-        ),
-        inputSchema=input_schema,
-        outputSchema=output_schema,
+    return mcp_types.Tool.model_validate(
+        {
+            "name": "synthesize_likes",
+            "description": (
+                "Synthesize a markdown report from the user's liked tweets. "
+                "Drives the synthesis-report orchestrator: round-1 search, "
+                "optional round-2 entity fan-out (hops=2), optional URL "
+                "fetch (fetch_urls=true), KG build, fenced-context "
+                "assembly, DSPy synthesis, markdown render. The default "
+                "path performs zero outbound HTTP beyond the LM endpoint."
+            ),
+            "inputSchema": input_schema,
+            "outputSchema": output_schema,
+        }
     )
 
 
@@ -368,19 +378,23 @@ def _error_result(category: str, message: str) -> mcp_types.CallToolResult:
     structured error payload plus a JSON text content for clients that
     only read ``content``."""
     payload = _error_payload(category, message)
-    return mcp_types.CallToolResult(
-        content=[mcp_types.TextContent(type="text", text=json.dumps(payload))],
-        structuredContent=payload,
-        isError=True,
+    return mcp_types.CallToolResult.model_validate(
+        {
+            "content": [mcp_types.TextContent(type="text", text=json.dumps(payload))],
+            "structuredContent": payload,
+            "isError": True,
+        }
     )
 
 
 def _success_result(structured: dict[str, Any]) -> mcp_types.CallToolResult:
     """Build a successful ``CallToolResult`` with structured + text content."""
-    return mcp_types.CallToolResult(
-        content=[mcp_types.TextContent(type="text", text=json.dumps(structured, indent=2))],
-        structuredContent=structured,
-        isError=False,
+    return mcp_types.CallToolResult.model_validate(
+        {
+            "content": [mcp_types.TextContent(type="text", text=json.dumps(structured, indent=2))],
+            "structuredContent": structured,
+            "isError": False,
+        }
     )
 
 
@@ -452,11 +466,11 @@ def build_server(index: TweetIndex) -> Server:
     server: Server = Server(name="x-likes-mcp", version=__version__)
     tool_defs = _build_tool_definitions()
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[attr-defined, unused-ignore]
     async def _list_tools() -> list[mcp_types.Tool]:  # pragma: no cover (driven by SDK)
         return tool_defs
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[attr-defined, unused-ignore]
     async def _call_tool(  # pragma: no cover (driven by SDK)
         name: str, arguments: dict[str, Any]
     ) -> mcp_types.CallToolResult:
